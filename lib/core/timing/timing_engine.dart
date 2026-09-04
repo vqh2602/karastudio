@@ -26,6 +26,30 @@ class TimingEngine {
 
   static const int minimumTokenDurationUs = 50000;
 
+  /// A tap closes the previous word and opens the next without guessing its end.
+  LyricLine beginTappedToken(LyricLine line, int index, int nowUs) {
+    if (index < 0 || index >= line.tokens.length) return line;
+    final tokens = List<LyricToken>.from(line.tokens);
+    var boundaryUs = math.max(0, nowUs);
+    if (index > 0 && tokens[index - 1].startUs != null) {
+      boundaryUs = math.max(
+        boundaryUs,
+        tokens[index - 1].startUs! + minimumTokenDurationUs,
+      );
+      tokens[index - 1] = tokens[index - 1].copyWith(endUs: boundaryUs);
+    }
+    // Remove stale timing from the current and remaining words on re-record.
+    for (var i = index; i < tokens.length; i++) {
+      tokens[i] = tokens[i].copyWith(clearTiming: true);
+    }
+    tokens[index] = tokens[index].copyWith(startUs: boundaryUs);
+    return line.copyWith(
+      startUs: tokens.first.startUs ?? boundaryUs,
+      endUs: boundaryUs,
+      tokens: tokens,
+    );
+  }
+
   LyricLine preventTokenOverlaps(LyricLine line) {
     if (line.tokens.isEmpty) return line;
     final tokens = <LyricToken>[];

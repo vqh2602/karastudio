@@ -142,6 +142,7 @@ class EditorController extends ChangeNotifier {
       }
       _scheduleAutosave();
       status = 'Đã mở ${loaded.name}';
+      await _restoreAudioEffects();
     });
   }
 
@@ -235,6 +236,7 @@ class EditorController extends ChangeNotifier {
         ),
       );
       await playback.open(path);
+      await _restoreAudioEffects();
       isDirty = true;
       status = 'Đã import ${p.basename(path)}';
     });
@@ -596,6 +598,18 @@ class EditorController extends ChangeNotifier {
     } else if (playback.videoPath != video.path &&
         await File(video.path).exists()) {
       await playback.openVideo(video.path);
+    }
+    await _restoreAudioEffects();
+  }
+
+  Future<void> _restoreAudioEffects() async {
+    final settings = project?.settings;
+    if (settings == null || project?.audio == null) return;
+    try {
+      await playback.applyAudioEffects(settings.audioEffects);
+    } catch (error) {
+      lastError = 'Không khôi phục được hiệu ứng nghe thử: $error';
+      notifyListeners();
     }
   }
 

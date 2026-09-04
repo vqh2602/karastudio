@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'audio_effects.dart';
 
 String newId([String prefix = 'id']) {
   final now = DateTime.now().microsecondsSinceEpoch;
@@ -651,6 +652,7 @@ class ProjectSettings {
     this.keepActorPrefix = false,
     this.recordingMode = 'hold',
     this.preRollSeconds = 0,
+    this.audioEffects = const AudioEffects(),
   });
 
   final int autosaveSeconds;
@@ -669,6 +671,7 @@ class ProjectSettings {
   final bool keepActorPrefix;
   final String recordingMode;
   final int preRollSeconds;
+  final AudioEffects audioEffects;
 
   ProjectSettings copyWith({
     int? autosaveSeconds,
@@ -687,6 +690,7 @@ class ProjectSettings {
     bool? keepActorPrefix,
     String? recordingMode,
     int? preRollSeconds,
+    AudioEffects? audioEffects,
   }) => ProjectSettings(
     autosaveSeconds: autosaveSeconds ?? this.autosaveSeconds,
     snapEnabled: snapEnabled ?? this.snapEnabled,
@@ -704,6 +708,7 @@ class ProjectSettings {
     keepActorPrefix: keepActorPrefix ?? this.keepActorPrefix,
     recordingMode: recordingMode ?? this.recordingMode,
     preRollSeconds: preRollSeconds ?? this.preRollSeconds,
+    audioEffects: audioEffects ?? this.audioEffects,
   );
 
   Map<String, Object?> toJson() => {
@@ -723,6 +728,7 @@ class ProjectSettings {
     'keepActorPrefix': keepActorPrefix,
     'recordingMode': recordingMode,
     'preRollSeconds': preRollSeconds,
+    'audioEffects': audioEffects.toJson(),
   };
 
   factory ProjectSettings.fromJson(
@@ -748,6 +754,9 @@ class ProjectSettings {
     keepActorPrefix: json['keepActorPrefix'] as bool? ?? false,
     recordingMode: json['recordingMode'] as String? ?? 'hold',
     preRollSeconds: (json['preRollSeconds'] as num?)?.toInt() ?? 0,
+    audioEffects: AudioEffects.fromJson(
+      Map<String, Object?>.from(json['audioEffects'] as Map? ?? const {}),
+    ),
   );
 }
 

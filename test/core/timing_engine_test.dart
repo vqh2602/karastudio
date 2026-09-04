@@ -5,6 +5,52 @@ import 'package:karastudio/models/project_model.dart';
 void main() {
   const engine = TimingEngine();
 
+  test('tap leaves last word open and replaces stale penultimate timing', () {
+    const original = LyricLine(
+      id: 'tap',
+      text: 'nhớ em',
+      actorId: 'male',
+      tokens: [
+        LyricToken(id: 'a', text: 'nhớ', index: 0, startUs: 0, endUs: 9000000),
+        LyricToken(
+          id: 'b',
+          text: 'em',
+          index: 1,
+          startUs: 9000000,
+          endUs: 9500000,
+        ),
+      ],
+    );
+    final first = engine.preventTokenOverlaps(
+      engine.beginTappedToken(original, 0, 1000000),
+    );
+    final last = engine.preventTokenOverlaps(
+      engine.beginTappedToken(first, 1, 1500000),
+    );
+    expect(last.tokens.first.endUs, 1500000);
+    expect(last.tokens.last.startUs, 1500000);
+    expect(last.tokens.last.endUs, isNull);
+    final finished = engine.preventTokenOverlaps(
+      last.copyWith(
+        tokens: [last.tokens.first, last.tokens.last.copyWith(endUs: 6000000)],
+      ),
+    );
+    expect(finished.tokens.last.durationUs, 4500000);
+    expect(finished.tokens.first.durationUs, 500000);
+  });
+
+  test('single-word tap has no default end', () {
+    const line = LyricLine(
+      id: 'solo',
+      text: 'ơi',
+      actorId: 'male',
+      tokens: [LyricToken(id: 'a', text: 'ơi', index: 0)],
+    );
+    final opened = engine.beginTappedToken(line, 0, 1000000);
+    expect(opened.tokens.single.startUs, 1000000);
+    expect(opened.tokens.single.endUs, isNull);
+  });
+
   final sampleLines = [
     const LyricLine(
       id: 'line-1',

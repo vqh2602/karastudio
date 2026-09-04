@@ -21,11 +21,19 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
   int _currentTokenIndex = 0;
   bool _isRecording = false;
   int? _keyPressStartUs;
+  int? _pressedTokenIndex;
   final FocusNode _focusNode = FocusNode();
 
   @override
   void initState() {
     super.initState();
+    final editor = ref.read(editorControllerProvider);
+    final sel = editor.selectedLyricLineIndex;
+    if (sel != null &&
+        sel >= 0 &&
+        sel < (editor.project?.lyricLines.length ?? 0)) {
+      _currentLineIndex = sel;
+    }
     _focusNode.requestFocus();
   }
 
@@ -43,6 +51,7 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
       _isRecording = true;
       _currentTokenIndex = 0;
       _keyPressStartUs = null;
+      _pressedTokenIndex = null;
     });
 
     final anchorUs = _recordingAnchorUs(project, _currentLineIndex);
@@ -76,6 +85,7 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
       _currentLineIndex = lineIndex;
       _currentTokenIndex = 0;
       _keyPressStartUs = null;
+      _pressedTokenIndex = null;
     });
     final anchorUs = _recordingAnchorUs(project, lineIndex);
     await playback.seek(Duration(microseconds: anchorUs));
@@ -121,16 +131,111 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
       _currentLineIndex = startLineIndex;
       _currentTokenIndex = 0;
       _keyPressStartUs = null;
+      _pressedTokenIndex = null;
     });
     _focusNode.requestFocus();
   }
 
   void _stopRecording(PlaybackClock playback) {
     playback.pause();
+    if (_keyPressStartUs != null) {
+      final editor = ref.read(editorControllerProvider);
+      final project = editor.project;
+      if (project != null && _currentLineIndex < project.lyricLines.length) {
+        final line = project.lyricLines[_currentLineIndex];
+        final targetIdx = _pressedTokenIndex ?? _currentTokenIndex;
+        if (targetIdx < line.tokens.length) {
+          final offsetUs = (project.settings.inputTimingOffsetMs * 1000);
+          final nowUs = math.max(
+            _keyPressStartUs! + 50000,
+            playback.positionUs + offsetUs,
+          );
+          final tokens = List<LyricToken>.from(line.tokens);
+          tokens[targetIdx] = tokens[targetIdx].copyWith(
+            startUs: tokens[targetIdx].startUs ?? _keyPressStartUs,
+            endUs: nowUs,
+          );
+          final lineStart = line.startUs ?? _keyPressStartUs;
+          final updatedLine = line.copyWith(
+            startUs: lineStart,
+            endUs: nowUs,
+            tokens: tokens,
+          );
+          final updatedLines = List<LyricLine>.from(project.lyricLines);
+          updatedLines[_currentLineIndex] = updatedLine;
+          editor.updateLyricLines(
+            updatedLines,
+            description: 'Chốt timing từ khi dừng ghi',
+          );
+        }
+      }
+    }
     setState(() {
       _isRecording = false;
       _keyPressStartUs = null;
+      _pressedTokenIndex = null;
     });
+  }
+
+  void _advanceToNextLine(EditorController editor, PlaybackClock playback) {
+    final project = editor.project;
+    final totalLines = project?.lyricLines.length ?? 0;
+
+    setState(() {
+      _keyPressStartUs = null;
+      _pressedTokenIndex = null;
+      if (_currentLineIndex + 1 < totalLines) {
+        _currentLineIndex++;
+        _currentTokenIndex = 0;
+      } else {
+        _stopRecording(playback);
+      }
+    });
+
+    if (_currentLineIndex < totalLines) {
+      editor.selectLyricLine(_currentLineIndex);
+    }
+  }
+
+  void _finalizeLastWordAndAdvance(
+    EditorController editor,
+    PlaybackClock playback,
+    int endUs,
+  ) {
+    final project = editor.project;
+    if (project == null || _currentLineIndex >= project.lyricLines.length) {
+      return;
+    }
+
+    final line = project.lyricLines[_currentLineIndex];
+    if (line.tokens.isEmpty) {
+      _advanceToNextLine(editor, playback);
+      return;
+    }
+
+    final lastIdx = line.tokens.length - 1;
+    final tokens = List<LyricToken>.from(line.tokens);
+    final startUs =
+        tokens[lastIdx].startUs ?? (_keyPressStartUs ?? (endUs - 300000));
+    final finalEndUs = math.max(startUs + 50000, endUs);
+
+    tokens[lastIdx] = tokens[lastIdx].copyWith(
+      startUs: startUs,
+      endUs: finalEndUs,
+    );
+
+    final lineStart = line.startUs ?? startUs;
+    final updatedLine = line.copyWith(
+      startUs: lineStart,
+      endUs: finalEndUs,
+      tokens: tokens,
+    );
+
+    final updatedLines = List<LyricLine>.from(project.lyricLines);
+    updatedLines[_currentLineIndex] = updatedLine;
+    editor.updateLyricLines(updatedLines, description: 'Chốt timing chữ cuối');
+
+    _advanceToNextLine(editor, playback);
   }
 
   void _handleKeyDown(EditorController editor, PlaybackClock playback) {
@@ -146,9 +251,10 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
     final mode = project.settings.recordingMode;
     if (mode == 'hold') {
       _keyPressStartUs ??= nowUs;
+      _pressedTokenIndex = _currentTokenIndex;
     } else {
       // Tap Mode
-      _handleTap(editor, nowUs);
+      _handleTap(editor, playback, nowUs);
     }
   }
 
@@ -165,8 +271,16 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
       playback.positionUs + offsetUs,
     );
 
+    final mode = project.settings.recordingMode;
+    if (mode == 'tap') {
+      // A release must not end the final word: wait for the next tap or Stop.
+      return;
+    }
+
+    // Hold Mode
     final line = project.lyricLines[_currentLineIndex];
     if (_currentTokenIndex < line.tokens.length) {
+      final isLastTokenOfLine = _currentTokenIndex + 1 >= line.tokens.length;
       final tokens = List<LyricToken>.from(line.tokens);
       tokens[_currentTokenIndex] = tokens[_currentTokenIndex].copyWith(
         startUs: _keyPressStartUs,
@@ -186,7 +300,8 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
 
       setState(() {
         _keyPressStartUs = null;
-        if (_currentTokenIndex + 1 < line.tokens.length) {
+        _pressedTokenIndex = null;
+        if (!isLastTokenOfLine) {
           _currentTokenIndex++;
         } else {
           // Line complete, advance to next line
@@ -198,48 +313,44 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
           }
         }
       });
+
+      if (isLastTokenOfLine && _currentLineIndex < project.lyricLines.length) {
+        editor.selectLyricLine(_currentLineIndex);
+      }
     }
   }
 
-  void _handleTap(EditorController editor, int nowUs) {
+  void _handleTap(EditorController editor, PlaybackClock playback, int nowUs) {
     final project = editor.project;
     if (project == null || _currentLineIndex >= project.lyricLines.length) {
       return;
     }
 
     final line = project.lyricLines[_currentLineIndex];
-    final tokens = List<LyricToken>.from(line.tokens);
-
-    if (_currentTokenIndex < tokens.length) {
-      if (_currentTokenIndex > 0) {
-        // End previous token
-        tokens[_currentTokenIndex - 1] = tokens[_currentTokenIndex - 1]
-            .copyWith(endUs: nowUs);
-      }
-      tokens[_currentTokenIndex] = tokens[_currentTokenIndex].copyWith(
-        startUs: nowUs,
-      );
-
-      final updatedLine = line.copyWith(
-        startUs: line.startUs ?? nowUs,
-        tokens: tokens,
-      );
-      final updatedLines = List<LyricLine>.from(project.lyricLines);
-      updatedLines[_currentLineIndex] = updatedLine;
-      editor.updateLyricLines(updatedLines, description: 'Tap timing');
-
-      setState(() {
-        _currentTokenIndex++;
-        if (_currentTokenIndex >= tokens.length) {
-          if (_currentLineIndex + 1 < project.lyricLines.length) {
-            _currentLineIndex++;
-            _currentTokenIndex = 0;
-          } else {
-            _stopRecording(ref.read(playbackClockProvider));
-          }
-        }
-      });
+    if (line.tokens.isEmpty) {
+      _advanceToNextLine(editor, playback);
+      return;
     }
+
+    if (_pressedTokenIndex == line.tokens.length - 1 &&
+        _keyPressStartUs != null) {
+      _finalizeLastWordAndAdvance(editor, playback, nowUs);
+      return;
+    }
+
+    final updatedLine = editor.timingEngine.beginTappedToken(
+      line,
+      _currentTokenIndex,
+      nowUs,
+    );
+    final updatedLines = List<LyricLine>.from(project.lyricLines);
+    updatedLines[_currentLineIndex] = updatedLine;
+    editor.updateLyricLines(updatedLines, description: 'Tap timing');
+    setState(() {
+      _keyPressStartUs = updatedLine.tokens[_currentTokenIndex].startUs;
+      _pressedTokenIndex = _currentTokenIndex;
+      if (_currentTokenIndex < line.tokens.length - 1) _currentTokenIndex++;
+    });
   }
 
   @override
@@ -281,6 +392,8 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
         if (event.logicalKey == LogicalKeyboardKey.space) {
           if (event is KeyDownEvent) {
             _handleKeyDown(editor, playback);
+          } else if (event is KeyRepeatEvent) {
+            return KeyEventResult.handled;
           } else if (event is KeyUpEvent) {
             _handleKeyUp(editor, playback);
           }
@@ -584,6 +697,19 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
               const SizedBox(height: 8),
 
               // Mode & Controls Bar
+              if (project.settings.recordingMode == 'tap')
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    _isRecording &&
+                            _pressedTokenIndex ==
+                                (currentLine?.tokens.length ?? 0) - 1 &&
+                            _keyPressStartUs != null
+                        ? 'Đang ngân từ cuối — gõ Space khi hát xong để kết thúc câu.'
+                        : 'Gõ Space ở đầu mỗi từ. Ngân từ cuối xong, gõ thêm một lần để kết thúc câu.',
+                    style: const TextStyle(fontSize: 11, color: Colors.amber),
+                  ),
+                ),
               Row(
                 children: [
                   SegmentedButton<String>(
@@ -592,13 +718,15 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
                       ButtonSegment(value: 'tap', label: Text('Gõ nhịp')),
                     ],
                     selected: {project.settings.recordingMode},
-                    onSelectionChanged: (set) {
-                      final updatedSettings = project.settings.copyWith(
-                        recordingMode: set.first,
-                      );
-                      editor.updateProjectSettings(updatedSettings);
-                      _focusNode.requestFocus();
-                    },
+                    onSelectionChanged: _isRecording
+                        ? null
+                        : (set) {
+                            final updatedSettings = project.settings.copyWith(
+                              recordingMode: set.first,
+                            );
+                            editor.updateProjectSettings(updatedSettings);
+                            _focusNode.requestFocus();
+                          },
                   ),
                   const Spacer(),
                   DropdownButtonHideUnderline(
@@ -606,17 +734,19 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
                       value: playback.speed,
                       isDense: true,
                       icon: const Icon(Icons.speed, size: 15),
-                      items: const [0.5, 0.75, 1.0, 1.25]
-                          .map(
-                            (speed) => DropdownMenuItem(
-                              value: speed,
-                              child: Text(
-                                '$speed×',
-                                style: const TextStyle(fontSize: 11),
-                              ),
-                            ),
-                          )
-                          .toList(),
+                      items:
+                          ({0.5, 0.75, 1.0, 1.25, playback.speed}.toList()
+                                ..sort())
+                              .map(
+                                (speed) => DropdownMenuItem(
+                                  value: speed,
+                                  child: Text(
+                                    '$speed×',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                              )
+                              .toList(),
                       onChanged: (speed) {
                         if (speed != null) playback.setSpeed(speed);
                         _focusNode.requestFocus();

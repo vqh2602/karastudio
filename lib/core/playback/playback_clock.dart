@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import '../../models/audio_effects.dart';
 
 class PlaybackClock extends ChangeNotifier {
   PlaybackClock()
@@ -325,6 +326,11 @@ class PlaybackClock extends ChangeNotifier {
   }
 
   Future<void> setSpeed(double value) async {
+    final anchor = positionUs;
+    position = Duration(microseconds: anchor);
+    _anchorPosition = position;
+    _interpolationStopwatch.reset();
+    value = value.clamp(0.25, 4.0);
     speed = value;
     if (mediaPath != null) {
       await player.setRate(value);
@@ -335,7 +341,20 @@ class PlaybackClock extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> applyAudioEffects(AudioEffects effects) async {
+    final native = player.platform;
+    if (native is! NativePlayer) {
+      throw UnsupportedError('Hiệu ứng âm thanh cần bộ phát desktop.');
+    }
+    await native.setProperty('af', effects.mpvFilters);
+    final applied = await native.getProperty('af');
+    if (effects.mpvFilters.isNotEmpty && !applied.contains('lavfi')) {
+      throw StateError('Bộ phát chưa hỗ trợ bộ lọc âm thanh.');
+    }
+  }
+
   Future<void> closeMedia() async {
+    await applyAudioEffects(const AudioEffects());
     await player.stop();
     await videoPlayer.stop();
     mediaPath = null;

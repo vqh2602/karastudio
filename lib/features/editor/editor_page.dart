@@ -16,6 +16,7 @@ import '../palette/command_palette.dart';
 import '../timeline/waveform_timeline.dart';
 import '../timing/recording_overlay.dart';
 import 'editor_controller.dart';
+import 'audio_effects_dialog.dart';
 
 class EditorPage extends ConsumerStatefulWidget {
   const EditorPage({super.key});
@@ -959,6 +960,13 @@ class _Transport extends StatelessWidget {
               ),
               const Spacer(),
               // Quick Speed Chips
+              IconButton(
+                tooltip: 'Đổi tông / Hiệu ứng âm thanh',
+                onPressed: editor.project?.audio == null
+                    ? null
+                    : () => showAudioEffectsDialog(context, editor),
+                icon: const Icon(Icons.equalizer, size: 20),
+              ),
               Row(
                 children: [
                   const Icon(Icons.speed, size: 14, color: Colors.white54),

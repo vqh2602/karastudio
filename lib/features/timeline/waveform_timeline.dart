@@ -165,7 +165,7 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
     final pos = event.localPosition;
 
     if (pos.dy >= rulerHeight + markersHeight && pos.dy <= waveTop) {
-      final hit = _hitTestToken(pos.dx, width);
+      final hit = _hitTestToken(pos.dx, width, pos.dy);
       if (hit != null) {
         if (hit.isLeftEdge || hit.isRightEdge) {
           if (_cursor != SystemMouseCursors.resizeColumn) {
@@ -186,19 +186,22 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
     }
   }
 
-  _TokenHitResult? _hitTestToken(double x, double width) {
+  _TokenHitResult? _hitTestToken(double x, double width, [double? y]) {
     final project = widget.project;
     if (project == null || project.lyricLines.isEmpty) return null;
 
     const edgeTolerancePx = 6.0;
 
-    for (var l = 0; l < project.lyricLines.length; l++) {
+    // Search lines in reverse order so topmost rendered element is prioritized
+    for (var l = project.lyricLines.length - 1; l >= 0; l--) {
       final line = project.lyricLines[l];
-      for (var t = 0; t < line.tokens.length; t++) {
+      for (var t = line.tokens.length - 1; t >= 0; t--) {
         final token = line.tokens[t];
-        if (token.startUs != null && token.endUs != null) {
+        if (token.startUs != null) {
+          final effectiveEndUs = token.endUs ?? (token.startUs! + 500000);
           final startX = _timeUsToX(token.startUs!, width);
-          final endX = _timeUsToX(token.endUs!, width);
+          final rawEndX = _timeUsToX(effectiveEndUs, width);
+          final endX = math.max(startX + 8.0, rawEndX);
 
           if (x >= startX - edgeTolerancePx && x <= endX + edgeTolerancePx) {
             final isLeft = (x - startX).abs() <= edgeTolerancePx;
@@ -221,7 +224,7 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
 
     // 1. Subtitle Track Hit Testing
     if (pos.dy >= rulerHeight + markersHeight && pos.dy <= waveTop) {
-      final hit = _hitTestToken(pos.dx, width);
+      final hit = _hitTestToken(pos.dx, width, pos.dy);
       if (hit != null && widget.project != null) {
         widget.onLineSelected?.call(hit.lineIndex);
         final line = widget.project!.lyricLines[hit.lineIndex];
@@ -377,7 +380,7 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
   void _onTapDown(TapDownDetails details, double width) {
     final pos = details.localPosition;
     if (pos.dy < rulerHeight + markersHeight || pos.dy > waveTop) return;
-    final hit = _hitTestToken(pos.dx, width);
+    final hit = _hitTestToken(pos.dx, width, pos.dy);
     if (hit == null) return;
     widget.onLineSelected?.call(hit.lineIndex);
     setState(() {
@@ -399,7 +402,7 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
   void _onDoubleTapDown(TapDownDetails details, double width) {
     final pos = details.localPosition;
     if (pos.dy >= rulerHeight + markersHeight && pos.dy <= waveTop) {
-      final hit = _hitTestToken(pos.dx, width);
+      final hit = _hitTestToken(pos.dx, width, pos.dy);
       if (hit != null && widget.project != null) {
         widget.onLineSelected?.call(hit.lineIndex);
         final line = widget.project!.lyricLines[hit.lineIndex];
@@ -620,7 +623,6 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
                 Navigator.pop(context);
               },
             ),
-            const Spacer(),
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Hủy'),
@@ -769,6 +771,7 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
                 onPointerSignal: (event) =>
                     _onPointerSignal(event, constraints.maxWidth),
                 child: GestureDetector(
+                  key: const Key('timeline_gesture_detector'),
                   behavior: HitTestBehavior.opaque,
                   onTapDown: (d) => _onTapDown(d, constraints.maxWidth),
                   onDoubleTapDown: (d) =>
@@ -990,7 +993,8 @@ class _MultiTrackTimelinePainter extends CustomPainter {
     canvas.drawRect(rect, Paint()..color = const Color(0xFF1A1D24));
 
     if (project != null && project!.lyricLines.isNotEmpty) {
-      for (final line in project!.lyricLines) {
+      for (var l = 0; l < project!.lyricLines.length; l++) {
+        final line = project!.lyricLines[l];
         int? minStart = line.startUs;
         int? maxEnd = line.endUs;
 
@@ -1041,13 +1045,15 @@ class _MultiTrackTimelinePainter extends CustomPainter {
 
           // Draw Individual Tokens inside block
           for (final token in line.tokens) {
-            if (token.startUs != null && token.endUs != null) {
+            if (token.startUs != null) {
+              final isUntimedEnd = token.endUs == null;
+              final effectiveEndUs = token.endUs ?? (token.startUs! + 500000);
               final tokX =
                   (token.startUs! - viewStartUs) /
                   visibleDurationUs *
                   size.width;
               final tokEndX =
-                  (token.endUs! - viewStartUs) / visibleDurationUs * size.width;
+                  (effectiveEndUs - viewStartUs) / visibleDurationUs * size.width;
               final tokW = math.max(6.0, tokEndX - tokX);
 
               final tokRect = Rect.fromLTWH(tokX, top + 5, tokW, height - 10);
@@ -1060,14 +1066,18 @@ class _MultiTrackTimelinePainter extends CustomPainter {
               canvas.drawRRect(
                 tokRRect,
                 Paint()
-                  ..color = Color(actor.colorValue).withValues(alpha: 0.45),
+                  ..color = isUntimedEnd
+                      ? Colors.amber.withValues(alpha: 0.40)
+                      : Color(actor.colorValue).withValues(alpha: 0.45),
               );
 
               // Token Border
               canvas.drawRRect(
                 tokRRect,
                 Paint()
-                  ..color = Color(actor.colorValue).withValues(alpha: 0.9)
+                  ..color = isUntimedEnd
+                      ? Colors.amberAccent
+                      : Color(actor.colorValue).withValues(alpha: 0.9)
                   ..style = PaintingStyle.stroke
                   ..strokeWidth = 1.2,
               );
@@ -1087,11 +1097,11 @@ class _MultiTrackTimelinePainter extends CustomPainter {
                 final painter = TextPainter(
                   text: TextSpan(
                     text: token.text,
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: isUntimedEnd ? Colors.amberAccent : Colors.white,
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
-                      shadows: [Shadow(color: Colors.black87, blurRadius: 3)],
+                      shadows: const [Shadow(color: Colors.black87, blurRadius: 3)],
                     ),
                   ),
                   textDirection: TextDirection.ltr,
