@@ -16,6 +16,22 @@ double tokenSweepProgress(LyricToken token, int timeUs) {
   return ((timeUs - start) / (end - start)).clamp(0.0, 1.0);
 }
 
+const preparationFadeUs = 180000;
+
+/// Preparation fades before the onset; the actual sweep still starts exactly
+/// at the recorded timestamp.
+double tokenPreparationOpacity(LyricToken token, int timeUs) {
+  final start = token.startUs;
+  if (start == null || (token.endUs != null && timeUs >= token.endUs!)) {
+    return 0;
+  }
+  final t = ((timeUs - start + preparationFadeUs) / preparationFadeUs).clamp(
+    0.0,
+    1.0,
+  );
+  return 0.45 * t * t * (3 - 2 * t);
+}
+
 class TokenRenderBounds {
   const TokenRenderBounds({
     required this.token,
@@ -504,7 +520,7 @@ class KaraokeRenderer {
     );
 
     // 6. Draw Active Karaoke Running Fill with Progress Clipping
-    if (timeUs >= lineStartUs) {
+    if (timeUs >= lineStartUs - preparationFadeUs) {
       final activePaint = Paint()..style = PaintingStyle.fill;
       if (style.activeUseGradient) {
         activePaint.shader = ui.Gradient.linear(
@@ -520,11 +536,11 @@ class KaraokeRenderer {
       }
 
       final activeClip = Path();
-      final onsetClip = Path();
+      final preparationClips = <(Path, double)>[];
       for (final tb in layout.tokenBounds) {
         final token = tb.token;
         final tStart = token.startUs;
-        if (tStart == null || timeUs < tStart) continue;
+        if (tStart == null || timeUs < tStart - preparationFadeUs) continue;
         final progress = tokenSweepProgress(token, timeUs);
 
         // Local coordinate relative to line layout
@@ -533,11 +549,12 @@ class KaraokeRenderer {
         final localW = tb.rect.width;
         final localH = tb.rect.height;
 
-        // Mark the active word immediately at its recorded onset. Long held
-        // notes still sweep over their full duration, but no longer appear idle
-        // while the first few pixels of the sweep are invisible.
-        if (token.endUs == null || timeUs < token.endUs!) {
-          onsetClip.addRect(Rect.fromLTWH(localX, localY, localW, localH));
+        final preparationOpacity = tokenPreparationOpacity(token, timeUs);
+        if (preparationOpacity > 0) {
+          preparationClips.add((
+            Path()..addRect(Rect.fromLTWH(localX, localY, localW, localH)),
+            preparationOpacity * effectTransform.opacity,
+          ));
         }
         if (progress <= 0) continue;
 
@@ -584,7 +601,7 @@ class KaraokeRenderer {
         activeClip.addRect(clipRect);
       }
       for (final (clip, opacity) in [
-        (onsetClip, effectTransform.opacity * 0.45),
+        ...preparationClips,
         (activeClip, effectTransform.opacity),
       ]) {
         if (clip.getBounds().isEmpty) continue;

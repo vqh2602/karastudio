@@ -680,7 +680,10 @@ class _ActorsTab extends StatelessWidget {
                           ),
                           DropdownMenuItem(
                             value: 'lamp',
-                            child: Text('Lamp', style: TextStyle(fontSize: 11)),
+                            child: Text(
+                              'Lamp · Bóng đèn',
+                              style: TextStyle(fontSize: 11),
+                            ),
                           ),
                           DropdownMenuItem(
                             value: 'countdown',

@@ -2,6 +2,13 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../models/project_model.dart';
 
+double leadDotIntensity(int index, double progress) {
+  // Four beats START at 0%, 25%, 50%, 75%. Leave the last quarter
+  // visible instead of lighting the fourth dot only when the line begins.
+  final t = ((progress - index / 4) / 0.10).clamp(0.0, 1.0);
+  return t * t * (3 - 2 * t);
+}
+
 class SignalIndicatorEngine {
   const SignalIndicatorEngine();
 
@@ -44,8 +51,8 @@ class SignalIndicatorEngine {
 
     for (var i = 0; i < dotCount; i++) {
       final dotPos = Offset(startX + i * spacing, pos.dy);
-      final stepThreshold = (i + 1) / dotCount;
-      final isFilled = progress >= stepThreshold;
+      final intensity = leadDotIntensity(i, progress);
+      final isFilled = intensity > 0;
 
       // Glow on active/filling dot
       if (isFilled) {
@@ -53,7 +60,7 @@ class SignalIndicatorEngine {
           dotPos,
           dotRadius * 1.5,
           Paint()
-            ..color = color.withValues(alpha: 0.4)
+            ..color = color.withValues(alpha: 0.4 * intensity)
             ..maskFilter = MaskFilter.blur(BlurStyle.normal, 6 * scale),
         );
       }
@@ -74,7 +81,7 @@ class SignalIndicatorEngine {
           dotPos,
           dotRadius * 0.7,
           Paint()
-            ..color = color
+            ..color = color.withValues(alpha: intensity)
             ..style = PaintingStyle.fill,
         );
       }
@@ -118,20 +125,86 @@ class SignalIndicatorEngine {
     double progress,
     double scale,
   ) {
-    final radius = 12.0 * scale;
-    final glow = 8.0 * scale * (0.5 + 0.5 * math.sin(progress * math.pi * 4));
-
-    // Glow halo
-    canvas.drawCircle(
-      pos,
-      radius + glow,
+    final t = progress.clamp(0.0, 1.0);
+    final brightness = t * t * (3 - 2 * t);
+    canvas.save();
+    canvas.translate(pos.dx, pos.dy);
+    canvas.scale(scale);
+    final bulb = Path()
+      ..moveTo(-5, 7)
+      ..cubicTo(-5, 2, -11, 1, -11, -6)
+      ..cubicTo(-11, -20, 11, -20, 11, -6)
+      ..cubicTo(11, 1, 5, 2, 5, 7)
+      ..close();
+    if (brightness > 0) {
+      canvas.drawPath(
+        bulb,
+        Paint()
+          ..color = color.withValues(alpha: 0.35 * brightness)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
+      );
+    }
+    canvas.drawPath(
+      bulb,
       Paint()
-        ..color = color.withValues(alpha: 0.5)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 8 * scale),
+        ..color = Color.lerp(const Color(0xFF252A34), color, brightness * 0.8)!,
     );
-
-    // Core lamp
-    canvas.drawCircle(pos, radius, Paint()..color = color);
+    final stroke = Paint()
+      ..color = Color.lerp(const Color(0xFF9099A8), color, brightness)!
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(bulb, stroke);
+    // Filament and stem.
+    canvas.drawPath(
+      Path()
+        ..moveTo(-4, -4)
+        ..lineTo(0, 0)
+        ..lineTo(4, -4)
+        ..moveTo(0, 0)
+        ..lineTo(0, 6),
+      stroke
+        ..color = Color.lerp(
+          const Color(0xFF9099A8),
+          Colors.white,
+          brightness,
+        )!,
+    );
+    // Metallic screw base gives the icon an unmistakable light-bulb silhouette.
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(-5, 8, 10, 6),
+        const Radius.circular(2),
+      ),
+      Paint()..color = const Color(0xFF87919F),
+    );
+    canvas.drawLine(
+      const Offset(-3, 11),
+      const Offset(3, 11),
+      Paint()
+        ..color = const Color(0xFF343B47)
+        ..strokeWidth = 1,
+    );
+    canvas.drawLine(
+      const Offset(-2, 16),
+      const Offset(2, 16),
+      stroke..color = const Color(0xFF87919F),
+    );
+    // Steady rays brighten with the countdown, with no flashing.
+    stroke.color = color.withValues(alpha: brightness);
+    for (final angle in [
+      -math.pi,
+      -3 * math.pi / 4,
+      -math.pi / 2,
+      -math.pi / 4,
+      0.0,
+    ]) {
+      final direction = Offset(math.cos(angle), math.sin(angle));
+      const center = Offset(0, -6);
+      canvas.drawLine(center + direction * 15, center + direction * 19, stroke);
+    }
+    canvas.restore();
   }
 
   void _renderCountdown(
@@ -159,6 +232,7 @@ class SignalIndicatorEngine {
     )..layout();
 
     painter.paint(canvas, pos - Offset(painter.width / 2, painter.height / 2));
+    painter.dispose();
   }
 
   void _renderPulse(

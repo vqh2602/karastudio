@@ -5,6 +5,28 @@ import 'package:karastudio/core/renderer/karaoke_renderer.dart';
 import 'package:karastudio/models/project_model.dart';
 
 void main() {
+  test('pale preparation fades in without moving the recorded sweep onset', () {
+    const token = LyricToken(
+      id: 't',
+      text: 'em',
+      index: 0,
+      startUs: 1000000,
+      endUs: 3000000,
+    );
+    expect(tokenPreparationOpacity(token, 820000), 0);
+    expect(tokenPreparationOpacity(token, 910000), closeTo(0.225, 1e-9));
+    expect(tokenPreparationOpacity(token, 1000000), closeTo(0.45, 1e-9));
+    expect(tokenSweepProgress(token, 999999), 0);
+    expect(tokenSweepProgress(token, 1000000), 0);
+    expect(tokenSweepProgress(token, 2000000), 0.5);
+    double previous = 0;
+    for (var time = 820000; time <= 1000000; time += 1000) {
+      final opacity = tokenPreparationOpacity(token, time);
+      expect(opacity, greaterThanOrEqualTo(previous));
+      expect(opacity - previous, lessThan(0.005));
+      previous = opacity;
+    }
+  });
   test('open final note stays visible until its actual closing tap', () {
     const line = LyricLine(
       id: 'sustain',
