@@ -5,6 +5,82 @@ import 'package:karastudio/core/renderer/karaoke_renderer.dart';
 import 'package:karastudio/models/project_model.dart';
 
 void main() {
+  test('open final note stays visible until its actual closing tap', () {
+    const line = LyricLine(
+      id: 'sustain',
+      text: 'nhớ em',
+      actorId: 'male',
+      startUs: 1000000,
+      endUs: 1500000,
+      tokens: [
+        LyricToken(
+          id: 'a',
+          text: 'nhớ',
+          index: 0,
+          startUs: 1000000,
+          endUs: 1500000,
+        ),
+        LyricToken(id: 'b', text: 'em', index: 1, startUs: 1500000),
+      ],
+    );
+    final renderer = KaraokeRenderer();
+    expect(renderer.lineTimingAt(line, timeUs: 7000000), (1000000, 7000000));
+    final finished = line.copyWith(
+      tokens: [line.tokens.first, line.tokens.last.copyWith(endUs: 7000000)],
+    );
+    expect(renderer.lineTimingAt(finished, timeUs: 8000000), (
+      1000000,
+      7000000,
+    ));
+  });
+  testWidgets(
+    'later words reuse shaped text instead of relayout on every frame',
+    (tester) async {
+      final renderer = KaraokeRenderer();
+      final project = ProjectModel.create('cached').copyWith(
+        settings: const ProjectSettings(layoutMode: LayoutMode.singleRow),
+        lyricLines: [
+          LyricLine(
+            id: 'line',
+            text: 'một hai ba bốn năm sáu bảy tám',
+            actorId: 'male',
+            startUs: 1000000,
+            endUs: 5000000,
+            tokens: [
+              for (final (i, word)
+                  in 'một hai ba bốn năm sáu bảy tám'.split(' ').indexed)
+                LyricToken(
+                  id: 't$i',
+                  text: word,
+                  index: i,
+                  startUs: 1000000 + i * 500000,
+                  endUs: 1500000 + i * 500000,
+                ),
+            ],
+          ),
+        ],
+      );
+      void frame(int time) {
+        final recorder = ui.PictureRecorder();
+        renderer.render(
+          canvas: ui.Canvas(recorder),
+          canvasSize: const ui.Size(960, 540),
+          project: project,
+          timeUs: time,
+        );
+        recorder.endRecording().dispose();
+      }
+
+      frame(1100000);
+      final pictures = renderer.textPictureBuildCount;
+      for (var time = 1116667; time < 4900000; time += 16667) {
+        frame(time);
+      }
+      expect(renderer.layoutBuildCount, 1);
+      expect(renderer.textPictureBuildCount, pictures);
+      renderer.clearCache();
+    },
+  );
   test('last words use exact recorded boundaries with linear sweep', () {
     const beforeLast = LyricToken(
       id: 'a',

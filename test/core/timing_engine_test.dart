@@ -5,6 +5,31 @@ import 'package:karastudio/models/project_model.dart';
 void main() {
   const engine = TimingEngine();
 
+  test('fast taps do not accumulate delay on the final two words', () {
+    var line = LyricLine(
+      id: 'rapid',
+      text: 'rapid words',
+      actorId: 'male',
+      tokens: List.generate(
+        20,
+        (i) => LyricToken(id: 't$i', text: '$i', index: i),
+      ),
+    );
+    for (var i = 0; i < 20; i++) {
+      line = engine.preventTokenOverlaps(
+        engine.beginTappedToken(line, i, 1000000 + i * 30000),
+      );
+    }
+    final tokens = [...line.tokens];
+    tokens.last = tokens.last.copyWith(endUs: 5000000);
+    line = engine.preventTokenOverlaps(line.copyWith(tokens: tokens));
+    for (var i = 0; i < 20; i++) {
+      expect(line.tokens[i].startUs, 1000000 + i * 30000);
+      if (i < 19) expect(line.tokens[i].durationUs, 30000);
+    }
+    expect(line.tokens.last.endUs, 5000000);
+  });
+
   test('tap leaves last word open and replaces stale penultimate timing', () {
     const original = LyricLine(
       id: 'tap',
@@ -211,7 +236,9 @@ void main() {
         greaterThanOrEqualTo(fixed.tokens[index - 1].endUs!),
       );
     }
-    expect(fixed.tokens[1].startUs, 1800000);
-    expect(fixed.tokens[2].startUs, 2100000);
+    expect(fixed.tokens[1].startUs, 1500000);
+    expect(fixed.tokens[2].startUs, 2050000);
+    expect(fixed.tokens[0].endUs, 1500000);
+    expect(fixed.tokens[1].endUs, 2050000);
   });
 }

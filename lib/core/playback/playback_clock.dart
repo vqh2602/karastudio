@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import '../../models/audio_effects.dart';
+import 'source_time.dart';
 
 class PlaybackClock extends ChangeNotifier {
   PlaybackClock()
@@ -71,6 +72,8 @@ class PlaybackClock extends ChangeNotifier {
       player.stream.playing.listen((value) {
         if (mediaPath != null) {
           isPlaying = value;
+          _anchorPosition = position;
+          _interpolationStopwatch.reset();
           if (value) {
             _interpolationStopwatch.start();
           } else {
@@ -84,6 +87,8 @@ class PlaybackClock extends ChangeNotifier {
       videoPlayer.stream.playing.listen((value) {
         if (mediaPath == null && videoPath != null) {
           isPlaying = value;
+          _anchorPosition = position;
+          _interpolationStopwatch.reset();
           if (value) {
             _interpolationStopwatch.start();
           } else {
@@ -96,6 +101,11 @@ class PlaybackClock extends ChangeNotifier {
 
     _subscriptions.add(
       player.stream.buffering.listen((value) {
+        if (mediaPath != null && value != isBuffering) {
+          position = Duration(microseconds: precisePositionUs);
+          _anchorPosition = position;
+          _interpolationStopwatch.reset();
+        }
         isBuffering = value;
         notifyListeners();
       }),
@@ -103,6 +113,11 @@ class PlaybackClock extends ChangeNotifier {
 
     _subscriptions.add(
       videoPlayer.stream.buffering.listen((value) {
+        if (mediaPath == null && value != isVideoBuffering) {
+          position = Duration(microseconds: precisePositionUs);
+          _anchorPosition = position;
+          _interpolationStopwatch.reset();
+        }
         isVideoBuffering = value;
         notifyListeners();
       }),
@@ -130,6 +145,9 @@ class PlaybackClock extends ChangeNotifier {
 
     _subscriptions.add(
       player.stream.rate.listen((value) {
+        _anchorPosition = Duration(microseconds: precisePositionUs);
+        position = _anchorPosition;
+        _interpolationStopwatch.reset();
         speed = value;
         notifyListeners();
       }),
@@ -167,9 +185,12 @@ class PlaybackClock extends ChangeNotifier {
     if (!isPlaying) {
       return position.inMicroseconds;
     }
-    final elapsedUs = (_interpolationStopwatch.elapsedMicroseconds * speed)
-        .round();
-    final totalUs = _anchorPosition.inMicroseconds + elapsedUs;
+    final totalUs = estimateSourceTime(
+      anchorUs: _anchorPosition.inMicroseconds,
+      elapsedWallUs: _interpolationStopwatch.elapsedMicroseconds,
+      speed: speed,
+      advancing: !(mediaPath != null ? isBuffering : isVideoBuffering),
+    );
     final maxUs = duration.inMicroseconds;
     if (maxUs > 0 && totalUs > maxUs) return maxUs;
     return math.max(0, totalUs);
@@ -263,7 +284,7 @@ class PlaybackClock extends ChangeNotifier {
   Future<void> play() async {
     _anchorPosition = position;
     _interpolationStopwatch.reset();
-    _interpolationStopwatch.start();
+    _interpolationStopwatch.stop();
     if (mediaPath != null && videoPath != null) {
       await _synchronizeVideo(position, force: true);
     }
@@ -275,6 +296,8 @@ class PlaybackClock extends ChangeNotifier {
     }
     if (mediaPath == null && videoPath != null) {
       isPlaying = true;
+      _interpolationStopwatch.reset();
+      _interpolationStopwatch.start();
       notifyListeners();
     }
   }

@@ -772,71 +772,71 @@ class _SmoothKaraokeCanvas extends StatefulWidget {
 class _SmoothKaraokeCanvasState extends State<_SmoothKaraokeCanvas>
     with SingleTickerProviderStateMixin {
   late final Ticker _ticker;
+  final ValueNotifier<int> _repaint = ValueNotifier(0);
 
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker((_) {
-      if (widget.playback.isPlaying && mounted) {
-        setState(() {});
-      }
-    });
-    if (widget.playback.isPlaying) {
-      _ticker.start();
-    }
+    _ticker = createTicker((_) => _repaint.value++);
+    widget.playback.addListener(_onClockChanged);
+    _onClockChanged();
   }
 
-  @override
-  void didUpdateWidget(covariant _SmoothKaraokeCanvas oldWidget) {
-    super.didUpdateWidget(oldWidget);
+  void _onClockChanged() {
     if (widget.playback.isPlaying && !_ticker.isActive) {
       _ticker.start();
     } else if (!widget.playback.isPlaying && _ticker.isActive) {
       _ticker.stop();
     }
+    _repaint.value++;
+  }
+
+  @override
+  void didUpdateWidget(covariant _SmoothKaraokeCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.playback != widget.playback) {
+      oldWidget.playback.removeListener(_onClockChanged);
+      widget.playback.addListener(_onClockChanged);
+    }
+    _onClockChanged();
   }
 
   @override
   void dispose() {
+    widget.playback.removeListener(_onClockChanged);
     _ticker.dispose();
+    _repaint.dispose();
+    widget.renderer.clearCache();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: widget.playback,
-      builder: (context, _) {
-        if (widget.playback.isPlaying && !_ticker.isActive) {
-          _ticker.start();
-        } else if (!widget.playback.isPlaying && _ticker.isActive) {
-          _ticker.stop();
-        }
-        return CustomPaint(
-          size: Size.infinite,
-          painter: _KaraokeCanvasPainter(
-            renderer: widget.renderer,
-            project: widget.project,
-            timeUs: widget.playback.precisePositionUs,
-            showSafeAreas: widget.showSafeAreas,
-          ),
-        );
-      },
-    );
-  }
+  Widget build(BuildContext context) => RepaintBoundary(
+    child: CustomPaint(
+      size: Size.infinite,
+      painter: _KaraokeCanvasPainter(
+        repaint: _repaint,
+        playback: widget.playback,
+        renderer: widget.renderer,
+        project: widget.project,
+        showSafeAreas: widget.showSafeAreas,
+      ),
+    ),
+  );
 }
 
 class _KaraokeCanvasPainter extends CustomPainter {
-  const _KaraokeCanvasPainter({
+  _KaraokeCanvasPainter({
+    required Listenable repaint,
+    required this.playback,
     required this.renderer,
     required this.project,
-    required this.timeUs,
     required this.showSafeAreas,
-  });
+  }) : super(repaint: repaint);
 
+  final PlaybackClock playback;
   final KaraokeRenderer renderer;
   final ProjectModel project;
-  final int timeUs;
   final bool showSafeAreas;
 
   @override
@@ -845,7 +845,7 @@ class _KaraokeCanvasPainter extends CustomPainter {
       canvas: canvas,
       canvasSize: size,
       project: project,
-      timeUs: timeUs,
+      timeUs: playback.precisePositionUs,
       isPreview: true,
       showSafeAreas: showSafeAreas,
     );
@@ -853,7 +853,7 @@ class _KaraokeCanvasPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _KaraokeCanvasPainter old) =>
-      old.timeUs != timeUs ||
+      old.playback != playback ||
       old.project != project ||
       old.showSafeAreas != showSafeAreas;
 }

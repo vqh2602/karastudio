@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/playback/playback_clock.dart';
+import '../../core/playback/source_time.dart';
 import '../../models/project_model.dart';
 import '../editor/editor_controller.dart';
 
@@ -20,6 +21,7 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
   int _currentLineIndex = 0;
   int _currentTokenIndex = 0;
   bool _isRecording = false;
+  bool _isPreparing = false;
   int? _keyPressStartUs;
   int? _pressedTokenIndex;
   final FocusNode _focusNode = FocusNode();
@@ -49,6 +51,7 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
 
     setState(() {
       _isRecording = true;
+      _isPreparing = true;
       _currentTokenIndex = 0;
       _keyPressStartUs = null;
       _pressedTokenIndex = null;
@@ -60,6 +63,11 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
     final seekTo = Duration(microseconds: math.max(0, anchorUs - preRollUs));
     await playback.seek(seekTo);
     await playback.play();
+    if (!mounted || !_isRecording) {
+      await playback.pause();
+      return;
+    }
+    setState(() => _isPreparing = false);
     _focusNode.requestFocus();
   }
 
@@ -145,10 +153,9 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
         final line = project.lyricLines[_currentLineIndex];
         final targetIdx = _pressedTokenIndex ?? _currentTokenIndex;
         if (targetIdx < line.tokens.length) {
-          final offsetUs = (project.settings.inputTimingOffsetMs * 1000);
           final nowUs = math.max(
-            _keyPressStartUs! + 50000,
-            playback.positionUs + offsetUs,
+            _keyPressStartUs! + 1,
+            _recordingTime(project, playback),
           );
           final tokens = List<LyricToken>.from(line.tokens);
           tokens[targetIdx] = tokens[targetIdx].copyWith(
@@ -172,6 +179,7 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
     }
     setState(() {
       _isRecording = false;
+      _isPreparing = false;
       _keyPressStartUs = null;
       _pressedTokenIndex = null;
     });
@@ -217,7 +225,7 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
     final tokens = List<LyricToken>.from(line.tokens);
     final startUs =
         tokens[lastIdx].startUs ?? (_keyPressStartUs ?? (endUs - 300000));
-    final finalEndUs = math.max(startUs + 50000, endUs);
+    final finalEndUs = math.max(startUs + 1, endUs);
 
     tokens[lastIdx] = tokens[lastIdx].copyWith(
       startUs: startUs,
@@ -239,14 +247,13 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
   }
 
   void _handleKeyDown(EditorController editor, PlaybackClock playback) {
-    if (!_isRecording) return;
+    if (!_isRecording || _isPreparing) return;
     final project = editor.project;
     if (project == null || _currentLineIndex >= project.lyricLines.length) {
       return;
     }
 
-    final offsetUs = (project.settings.inputTimingOffsetMs * 1000);
-    final nowUs = math.max(0, playback.positionUs + offsetUs);
+    final nowUs = _recordingTime(project, playback);
 
     final mode = project.settings.recordingMode;
     if (mode == 'hold') {
@@ -265,10 +272,9 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
       return;
     }
 
-    final offsetUs = (project.settings.inputTimingOffsetMs * 1000);
     final nowUs = math.max(
-      _keyPressStartUs! + 50000,
-      playback.positionUs + offsetUs,
+      _keyPressStartUs! + 1,
+      _recordingTime(project, playback),
     );
 
     final mode = project.settings.recordingMode;
@@ -282,6 +288,10 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
     if (_currentTokenIndex < line.tokens.length) {
       final isLastTokenOfLine = _currentTokenIndex + 1 >= line.tokens.length;
       final tokens = List<LyricToken>.from(line.tokens);
+      // Old timing must not push freshly recorded words forward at another rate.
+      for (var i = _currentTokenIndex; i < tokens.length; i++) {
+        tokens[i] = tokens[i].copyWith(clearTiming: true);
+      }
       tokens[_currentTokenIndex] = tokens[_currentTokenIndex].copyWith(
         startUs: _keyPressStartUs,
         endUs: nowUs,
@@ -352,6 +362,13 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
       if (_currentTokenIndex < line.tokens.length - 1) _currentTokenIndex++;
     });
   }
+
+  int _recordingTime(ProjectModel project, PlaybackClock playback) =>
+      recordingSourceTime(
+        sourcePositionUs: playback.positionUs,
+        speed: playback.speed,
+        inputOffsetMs: project.settings.inputTimingOffsetMs,
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -609,18 +626,22 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
                         scrollDirection: Axis.horizontal,
                         child: Row(
                           children: currentLine.tokens.map((token) {
-                            final isCurrent = token.index == _currentTokenIndex;
-                            final isPassed = token.index < _currentTokenIndex;
+                            final activeIndex =
+                                _pressedTokenIndex ?? _currentTokenIndex;
+                            final isCurrent = token.index == activeIndex;
+                            final isPassed = token.index < activeIndex;
 
                             return Padding(
                               padding: const EdgeInsets.only(right: 5),
                               child: InkWell(
-                                onTap: () => setState(
-                                  () => _currentTokenIndex = token.index,
-                                ),
+                                onTap: _isRecording
+                                    ? null
+                                    : () => setState(() {
+                                        _currentTokenIndex = token.index;
+                                        _pressedTokenIndex = null;
+                                      }),
                                 borderRadius: BorderRadius.circular(5),
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 100),
+                                child: Container(
                                   padding: EdgeInsets.symmetric(
                                     horizontal: isCurrent ? 8 : 5,
                                     vertical: isCurrent ? 4 : 2,
@@ -747,10 +768,12 @@ class _RecordingOverlayState extends ConsumerState<RecordingOverlay> {
                                 ),
                               )
                               .toList(),
-                      onChanged: (speed) {
-                        if (speed != null) playback.setSpeed(speed);
-                        _focusNode.requestFocus();
-                      },
+                      onChanged: _isRecording
+                          ? null
+                          : (speed) {
+                              if (speed != null) playback.setSpeed(speed);
+                              _focusNode.requestFocus();
+                            },
                     ),
                   ),
                   IconButton.filledTonal(

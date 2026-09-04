@@ -61,6 +61,65 @@ class FakePlaybackClock extends ChangeNotifier implements PlaybackClock {
 }
 
 void main() {
+  for (final speed in [0.5, 0.75, 1.25, 2.0]) {
+    testWidgets('tap at $speed x saves original song positions', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final clock = FakePlaybackClock()..speed = speed;
+      final controller =
+          EditorController(
+              serializer: const ProjectSerializer(),
+              ffmpeg: FfmpegService(),
+              playback: clock,
+            )
+            ..project = ProjectModel.create('Rate test').copyWith(
+              settings: const ProjectSettings(
+                recordingMode: 'tap',
+                inputTimingOffsetMs: -80,
+              ),
+              lyricLines: const [
+                LyricLine(
+                  id: 'line',
+                  text: 'nhớ em',
+                  actorId: 'male',
+                  tokens: [
+                    LyricToken(id: 'a', text: 'nhớ', index: 0),
+                    LyricToken(id: 'b', text: 'em', index: 1),
+                  ],
+                ),
+              ],
+            );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            editorControllerProvider.overrideWith((ref) => controller),
+            playbackClockProvider.overrideWith((ref) => clock),
+          ],
+          child: MaterialApp(
+            home: Scaffold(body: RecordingOverlay(onClose: () {})),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'GHI (Space)'));
+      await tester.pumpAndSettle();
+      for (final position in [1000000, 1500000, 4000000]) {
+        clock.positionUs = position;
+        await tester.sendKeyEvent(LogicalKeyboardKey.space);
+        await tester.pump();
+      }
+      final tokens = controller.project!.lyricLines.single.tokens;
+      final offset = (80000 * speed).round();
+      expect(tokens[0].startUs, 1000000 - offset);
+      expect(tokens[0].endUs, 1500000 - offset);
+      expect(tokens[1].startUs, 1500000 - offset);
+      expect(tokens[1].endUs, 4000000 - offset);
+    });
+  }
   group('Timeline hit-testing and subtitle track tests', () {
     late ProjectModel project;
     late FakePlaybackClock clock;
@@ -259,6 +318,8 @@ void main() {
 
         // Should still be on Line 1 ('Câu 1 / 2')! Not jumped to Line 2!
         expect(find.text('Câu 1 / 2'), findsOneWidget);
+        expect(tester.widget<Text>(find.text('Mot')).style!.fontSize, 15);
+        expect(tester.widget<Text>(find.text('hai')).style!.fontSize, 12);
 
         // Tap Space for Word 1 ('hai')
         clock.positionUs = 2000000;
@@ -267,6 +328,8 @@ void main() {
 
         // Still on Line 1 ('Câu 1 / 2')!
         expect(find.text('Câu 1 / 2'), findsOneWidget);
+        expect(tester.widget<Text>(find.text('hai')).style!.fontSize, 15);
+        expect(tester.widget<Text>(find.text('ba')).style!.fontSize, 12);
 
         // Tap and release Space for Word 2 ('ba' - last token)
         clock.positionUs = 3000000;

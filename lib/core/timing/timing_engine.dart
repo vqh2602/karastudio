@@ -32,10 +32,7 @@ class TimingEngine {
     final tokens = List<LyricToken>.from(line.tokens);
     var boundaryUs = math.max(0, nowUs);
     if (index > 0 && tokens[index - 1].startUs != null) {
-      boundaryUs = math.max(
-        boundaryUs,
-        tokens[index - 1].startUs! + minimumTokenDurationUs,
-      );
+      boundaryUs = math.max(boundaryUs, tokens[index - 1].startUs! + 1);
       tokens[index - 1] = tokens[index - 1].copyWith(endUs: boundaryUs);
     }
     // Remove stale timing from the current and remaining words on re-record.
@@ -53,19 +50,35 @@ class TimingEngine {
   LyricLine preventTokenOverlaps(LyricLine line) {
     if (line.tokens.isEmpty) return line;
     final tokens = <LyricToken>[];
-    int? previousEndUs;
+    int? previousStartUs;
 
     for (final token in line.tokens) {
       if (token.startUs == null || token.endUs == null) {
         tokens.add(token.copyWith(index: tokens.length));
         continue;
       }
-      final startUs = math.max(token.startUs!, previousEndUs ?? 0);
-      final endUs = math.max(startUs + minimumTokenDurationUs, token.endUs!);
+      final startUs = math.max(token.startUs!, (previousStartUs ?? -1) + 1);
+      final endUs = math.max(startUs + 1, token.endUs!);
       tokens.add(
         token.copyWith(index: tokens.length, startUs: startUs, endUs: endUs),
       );
-      previousEndUs = endUs;
+      previousStartUs = startUs;
+    }
+
+    // Preserve recorded onsets. An overlong preceding word must be trimmed,
+    // not push every subsequent word later (which accumulated near line ends).
+    int? nextStartUs;
+    for (var i = tokens.length - 1; i >= 0; i--) {
+      final token = tokens[i];
+      if (token.startUs == null) continue;
+      if (token.endUs != null &&
+          nextStartUs != null &&
+          token.endUs! > nextStartUs) {
+        tokens[i] = token.copyWith(
+          endUs: math.max(token.startUs! + 1, nextStartUs),
+        );
+      }
+      nextStartUs = token.startUs;
     }
 
     final timed = tokens.where((token) => token.isTimed).toList();

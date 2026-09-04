@@ -40,6 +40,29 @@ void main() {
       expect(filters, contains('lavfi'));
       await clock.applyAudioEffects(const AudioEffects());
       expect(await native.getProperty('af'), isNot(contains('lavfi')));
+      for (final speed in [0.5, 0.75, 1.25, 2.0]) {
+        await clock.pause();
+        await clock.seek(Duration.zero);
+        await clock.setSpeed(speed);
+        await clock.play();
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        final before = double.parse(await native.getProperty('time-pos'));
+        final elapsed = Stopwatch()..start();
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+        final after = double.parse(await native.getProperty('time-pos'));
+        final wallSeconds = elapsed.elapsedMicroseconds / 1000000;
+        expect(
+          after - before,
+          closeTo(wallSeconds * speed, 0.2),
+          reason: 'Native source clock at $speed x',
+        );
+        expect(
+          clock.positionUs / 1000000,
+          closeTo(after, 0.3),
+          reason: 'Recording clock at $speed x',
+        );
+      }
+      await clock.pause();
     } finally {
       await clock.dispose();
       await dir.delete(recursive: true);

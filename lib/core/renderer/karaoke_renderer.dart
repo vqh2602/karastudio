@@ -56,6 +56,25 @@ class KaraokeRenderer {
 
   final KaraokeEffectsEngine effectsEngine;
   final SignalIndicatorEngine indicatorEngine;
+  ProjectModel? _cachedProject;
+  Size? _cachedSize;
+  final _layouts = <(LyricLine, double?, double?), LineRenderLayout>{};
+  final _pictures = <(LineRenderLayout, String), ui.Picture>{};
+  int layoutBuildCount = 0;
+  int textPictureBuildCount = 0;
+
+  void clearCache() {
+    for (final picture in _pictures.values) {
+      picture.dispose();
+    }
+    for (final layout in _layouts.values) {
+      layout.textPainter.dispose();
+    }
+    _pictures.clear();
+    _layouts.clear();
+    _cachedProject = null;
+    _cachedSize = null;
+  }
 
   void render({
     required Canvas canvas,
@@ -65,6 +84,13 @@ class KaraokeRenderer {
     bool isPreview = false,
     bool showSafeAreas = false,
   }) {
+    if (!identical(project, _cachedProject) ||
+        canvasSize != _cachedSize ||
+        _layouts.length > 128) {
+      clearCache();
+      _cachedProject = project;
+      _cachedSize = canvasSize;
+    }
     // Background media is composed by the preview/export pipeline. This
     // renderer must stay transparent so its canvas can safely sit on top of
     // either a photo or a video.
@@ -111,7 +137,7 @@ class KaraokeRenderer {
 
       for (var i = 0; i < lines.length; i++) {
         final line = lines[i];
-        final (start, end) = _getLineTiming(line);
+        final (start, end) = lineTimingAt(line, timeUs: timeUs);
         if (start == null || end == null) continue; // Bỏ qua câu chưa có timing
         final appearTime = math.max(0, start - leadTimeUs);
         final disappearTime = end + 1200000; // transition out linger
@@ -154,7 +180,7 @@ class KaraokeRenderer {
     } else {
       // Single Row or Multi-Row
       for (final line in lines) {
-        final (start, end) = _getLineTiming(line);
+        final (start, end) = lineTimingAt(line, timeUs: timeUs);
         if (start == null || end == null) continue; // Bỏ qua câu chưa có timing
         final appearTime = math.max(0, start - leadTimeUs);
         final disappearTime = end + 1000000;
@@ -180,7 +206,7 @@ class KaraokeRenderer {
     return result;
   }
 
-  (int?, int?) _getLineTiming(LyricLine line) {
+  (int?, int?) lineTimingAt(LyricLine line, {required int timeUs}) {
     int? minStart = line.startUs;
     int? maxEnd = line.endUs;
 
@@ -192,6 +218,10 @@ class KaraokeRenderer {
       }
       if (t.endUs != null) {
         maxEnd = (maxEnd == null) ? t.endUs! : math.max(maxEnd, t.endUs!);
+      } else if (t.startUs != null && timeUs >= t.startUs!) {
+        // Recording has opened this word but has not closed it. The line must
+        // not fade out using the preceding word's end during a sustained note.
+        maxEnd = math.max(maxEnd ?? timeUs, timeUs);
       }
     }
 
@@ -202,6 +232,23 @@ class KaraokeRenderer {
   }
 
   LineRenderLayout _layoutLine({
+    required ProjectModel project,
+    required LyricLine line,
+    required Size canvasSize,
+    double? overridePosX,
+    double? overridePosY,
+  }) => _layouts.putIfAbsent((line, overridePosX, overridePosY), () {
+    layoutBuildCount++;
+    return _buildLine(
+      project: project,
+      line: line,
+      canvasSize: canvasSize,
+      overridePosX: overridePosX,
+      overridePosY: overridePosY,
+    );
+  });
+
+  LineRenderLayout _buildLine({
     required ProjectModel project,
     required LyricLine line,
     required Size canvasSize,
@@ -320,11 +367,12 @@ class KaraokeRenderer {
     final actor = layout.actor;
     final scaleFactor = canvasSize.height / 1080.0;
 
-    final lineStartUs = line.startUs ?? 0;
+    final (resolvedStart, resolvedEnd) = lineTimingAt(line, timeUs: timeUs);
+    final lineStartUs = resolvedStart ?? 0;
 
     // Evaluate Transition & Effects
     final effectContext = EffectContext(
-      line: line,
+      line: line.copyWith(startUs: resolvedStart, endUs: resolvedEnd),
       style: style,
       actor: actor,
       timeUs: timeUs,
@@ -451,6 +499,7 @@ class KaraokeRenderer {
       canvas: canvas,
       layout: layout,
       paint: inactivePaint,
+      layer: 'inactive',
       alphaMultiplier: effectTransform.opacity,
     );
 
@@ -470,6 +519,8 @@ class KaraokeRenderer {
         activePaint.color = Color(style.activeColorValue);
       }
 
+      final activeClip = Path();
+      final onsetClip = Path();
       for (final tb in layout.tokenBounds) {
         final token = tb.token;
         final tStart = token.startUs;
@@ -486,15 +537,7 @@ class KaraokeRenderer {
         // notes still sweep over their full duration, but no longer appear idle
         // while the first few pixels of the sweep are invisible.
         if (token.endUs == null || timeUs < token.endUs!) {
-          canvas.save();
-          canvas.clipRect(Rect.fromLTWH(localX, localY, localW, localH));
-          _paintTextWithStyle(
-            canvas: canvas,
-            layout: layout,
-            paint: activePaint,
-            alphaMultiplier: effectTransform.opacity * 0.45,
-          );
-          canvas.restore();
+          onsetClip.addRect(Rect.fromLTWH(localX, localY, localW, localH));
         }
         if (progress <= 0) continue;
 
@@ -538,13 +581,21 @@ class KaraokeRenderer {
             );
         }
 
+        activeClip.addRect(clipRect);
+      }
+      for (final (clip, opacity) in [
+        (onsetClip, effectTransform.opacity * 0.45),
+        (activeClip, effectTransform.opacity),
+      ]) {
+        if (clip.getBounds().isEmpty) continue;
         canvas.save();
-        canvas.clipRect(clipRect);
+        canvas.clipPath(clip);
         _paintTextWithStyle(
           canvas: canvas,
           layout: layout,
           paint: activePaint,
-          alphaMultiplier: effectTransform.opacity,
+          layer: 'active',
+          alphaMultiplier: opacity,
         );
         canvas.restore();
       }
@@ -579,30 +630,39 @@ class KaraokeRenderer {
     required LineRenderLayout layout,
     required Paint paint,
     double alphaMultiplier = 1.0,
+    String layer = 'decoration',
   }) {
-    final originalColor = paint.color;
-    if (alphaMultiplier < 1.0) {
-      paint.color = paint.color.withValues(
-        alpha: paint.color.a * alphaMultiplier.clamp(0.0, 1.0),
+    final key =
+        '$layer/${paint.color.toARGB32()}/${paint.style}/'
+        '${paint.strokeWidth}/${paint.maskFilter}';
+    final picture = _pictures.putIfAbsent((layout, key), () {
+      textPictureBuildCount++;
+      final originalSpan = layout.textPainter.text as TextSpan;
+      final painter = TextPainter(
+        text: TextSpan(
+          text: originalSpan.text,
+          style: originalSpan.style?.copyWith(foreground: paint, color: null),
+        ),
+        textDirection: layout.textPainter.textDirection,
+        textAlign: layout.textPainter.textAlign,
+      )..layout(maxWidth: layout.totalSize.width);
+      final recorder = ui.PictureRecorder();
+      painter.paint(Canvas(recorder), Offset.zero);
+      final result = recorder.endRecording();
+      painter.dispose();
+      return result;
+    });
+    if (alphaMultiplier < 1) {
+      canvas.saveLayer(
+        null,
+        Paint()
+          ..color = Colors.white.withValues(alpha: alphaMultiplier.clamp(0, 1)),
       );
+      canvas.drawPicture(picture);
+      canvas.restore();
+    } else {
+      canvas.drawPicture(picture);
     }
-
-    final originalSpan = layout.textPainter.text as TextSpan;
-    final styledSpan = TextSpan(
-      text: originalSpan.text,
-      style: originalSpan.style?.copyWith(foreground: paint, color: null),
-    );
-
-    final painter = TextPainter(
-      text: styledSpan,
-      textDirection: layout.textPainter.textDirection,
-      textAlign: layout.textPainter.textAlign,
-    )..layout(maxWidth: layout.totalSize.width);
-
-    painter.paint(canvas, Offset.zero);
-    // The same fill is reused across words: opacity must not accumulate.
-    paint.color = originalColor;
-    painter.dispose();
   }
 
   void _drawSafeAreas(Canvas canvas, Size size) {

@@ -351,6 +351,7 @@ class ExportEngine {
       }
     } finally {
       bgImage?.dispose();
+      renderer.clearCache();
       stopwatch.stop();
     }
   }
