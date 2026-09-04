@@ -17,6 +17,7 @@ double tokenSweepProgress(LyricToken token, int timeUs) {
 }
 
 const preparationFadeUs = 180000;
+const preparationMaxOpacity = 0.15;
 
 /// Preparation fades before the onset; the actual sweep still starts exactly
 /// at the recorded timestamp.
@@ -29,7 +30,7 @@ double tokenPreparationOpacity(LyricToken token, int timeUs) {
     0.0,
     1.0,
   );
-  return 0.45 * t * t * (3 - 2 * t);
+  return preparationMaxOpacity * t * t * (3 - 2 * t);
 }
 
 class TokenRenderBounds {

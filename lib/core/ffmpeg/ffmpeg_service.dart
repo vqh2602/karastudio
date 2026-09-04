@@ -207,6 +207,57 @@ class FfmpegService {
     return p.join(support.path, 'waveforms', '$key.waveform.json');
   }
 
+  Future<String> renderProcessedAudio(
+    String audioPath,
+    AudioEffects effects,
+  ) async {
+    final file = File(audioPath);
+    if (!await file.exists()) {
+      throw FfmpegException('Không tìm thấy tệp audio: $audioPath');
+    }
+    final stat = await file.stat();
+    final key = sha1
+        .convert(
+          utf8.encode(
+            '$audioPath|${stat.size}|${stat.modified.microsecondsSinceEpoch}|${effects.semitones}|${effects.reverb}|${effects.tuningHz}',
+          ),
+        )
+        .toString();
+    final support = await getApplicationSupportDirectory();
+    final cacheDir = Directory(p.join(support.path, 'audio_fx_cache'));
+    if (!await cacheDir.exists()) {
+      await cacheDir.create(recursive: true);
+    }
+    final targetPath = p.join(cacheDir.path, '$key.wav');
+    final targetFile = File(targetPath);
+    if (await targetFile.exists() && await targetFile.length() > 0) {
+      return targetPath;
+    }
+
+    final executable = await getFfmpegPath();
+    final filter = effects.filterGraph;
+    final args = [
+      '-y',
+      '-v',
+      'error',
+      '-i',
+      audioPath,
+      if (filter.isNotEmpty) ...['-af', filter],
+      '-c:a',
+      'pcm_s16le',
+      targetPath,
+    ];
+    final result = await Process.run(executable, args);
+    if (result.exitCode != 0) {
+      throw FfmpegException(
+        'Không thể xử lý hiệu ứng âm thanh: ${result.stderr}',
+        command: '$executable ${args.join(' ')}',
+        stderr: result.stderr.toString(),
+      );
+    }
+    return targetPath;
+  }
+
   Future<WaveformCache> loadOrGenerateWaveform(
     MediaAsset asset, {
     void Function(double progress)? onProgress,

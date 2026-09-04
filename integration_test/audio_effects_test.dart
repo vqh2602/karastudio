@@ -31,15 +31,18 @@ void main() {
       await tester.pumpWidget(const MaterialApp(home: SizedBox()));
       await tester.pump();
       await clock.open(file);
-      await clock.applyAudioEffects(
-        const AudioEffects(semitones: 2, reverb: 25),
+      final processedPath = await FfmpegService().renderProcessedAudio(
+        file,
+        const AudioEffects(semitones: -3, reverb: 25),
       );
+      expect(File(processedPath).existsSync(), isTrue);
+      await clock.switchAudioSource(processedPath);
+      await clock.play();
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(clock.isPlaying, isTrue);
+      await clock.pause();
+      await clock.switchAudioSource(file);
       final native = clock.player.platform as NativePlayer;
-      final filters = await native.getProperty('af');
-      expect(filters, contains('asetrate'));
-      expect(filters, contains('lavfi'));
-      await clock.applyAudioEffects(const AudioEffects());
-      expect(await native.getProperty('af'), isNot(contains('lavfi')));
       for (final speed in [0.5, 0.75, 1.25, 2.0]) {
         await clock.pause();
         await clock.seek(Duration.zero);

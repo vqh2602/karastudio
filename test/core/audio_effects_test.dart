@@ -7,7 +7,7 @@ void main() {
     const fx = AudioEffects(semitones: 12, reverb: 50, speed: 2);
     expect(fx.mpvFilters, 'lavfi=[${fx.filterGraph}]');
     expect(fx.exportFilterGraph, startsWith(fx.filterGraph));
-    expect(fx.exportFilterGraph, contains('atempo=1.41421356'));
+    expect(fx.exportFilterGraph, contains('atempo=tempo=1.41421356'));
     expect(AudioEffects.fromJson(fx.toJson()).speed, 2);
   });
   test('pitch tuning uses semitone ratio without changing speed', () {

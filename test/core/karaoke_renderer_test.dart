@@ -14,8 +14,8 @@ void main() {
       endUs: 3000000,
     );
     expect(tokenPreparationOpacity(token, 820000), 0);
-    expect(tokenPreparationOpacity(token, 910000), closeTo(0.225, 1e-9));
-    expect(tokenPreparationOpacity(token, 1000000), closeTo(0.45, 1e-9));
+    expect(tokenPreparationOpacity(token, 910000), closeTo(0.075, 1e-9));
+    expect(tokenPreparationOpacity(token, 1000000), closeTo(0.15, 1e-9));
     expect(tokenSweepProgress(token, 999999), 0);
     expect(tokenSweepProgress(token, 1000000), 0);
     expect(tokenSweepProgress(token, 2000000), 0.5);

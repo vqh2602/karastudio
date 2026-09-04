@@ -14,20 +14,21 @@ class AudioEffects {
   final double tuningHz;
   final double speed;
 
+  bool get hasPitchOrReverb =>
+      semitones != 0 || reverb > 0 || (tuningHz - 440).abs() >= 0.01;
+
   double get pitchRatio => math.pow(2, semitones / 12) * tuningHz / 440;
 
   String get filterGraph {
     final filters = <String>[];
     if ((pitchRatio - 1).abs() > 0.000001) {
-      // Bundled libmpv does not include Rubber Band on all desktops.
-      // Shift sample rate, then compensate tempo in two supported stages.
       final tempo = math.sqrt(1 / pitchRatio).toStringAsFixed(8);
       filters.addAll([
-        'aresample=48000',
-        'asetrate=${(48000 * pitchRatio).round()}',
-        'aresample=48000',
-        'atempo=$tempo',
-        'atempo=$tempo',
+        'aresample=sample_rate=48000',
+        'asetrate=sample_rate=${(48000 * pitchRatio).round()}',
+        'aresample=sample_rate=48000',
+        'atempo=tempo=$tempo',
+        'atempo=tempo=$tempo',
       ]);
     }
     if (reverb > 0) {
@@ -38,7 +39,9 @@ class AudioEffects {
         0.14,
         0.09,
       ].map((decay) => (decay * wet).toStringAsFixed(4)).join('|');
-      filters.add('aecho=0.7:0.8:37|61|89|127:$decays');
+      filters.add(
+        'aecho=in_gain=0.7:out_gain=0.8:delays=37|61|89|127:decays=$decays',
+      );
     }
     return filters.join(',');
   }
@@ -48,8 +51,8 @@ class AudioEffects {
   String get exportFilterGraph => [
     if (filterGraph.isNotEmpty) filterGraph,
     if (speed != 1) ...[
-      'atempo=${math.sqrt(speed).toStringAsFixed(8)}',
-      'atempo=${math.sqrt(speed).toStringAsFixed(8)}',
+      'atempo=tempo=${math.sqrt(speed).toStringAsFixed(8)}',
+      'atempo=tempo=${math.sqrt(speed).toStringAsFixed(8)}',
     ],
   ].join(',');
 

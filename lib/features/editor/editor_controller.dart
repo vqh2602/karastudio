@@ -12,6 +12,7 @@ import '../../core/serialization/project_serializer.dart';
 import '../../core/timing/timing_engine.dart';
 import '../../core/undo_redo/undo_redo_manager.dart';
 import '../../core/waveform/waveform_cache.dart';
+import '../../models/audio_effects.dart';
 import '../../models/project_model.dart';
 
 final projectSerializerProvider = Provider((ref) => const ProjectSerializer());
@@ -602,13 +603,53 @@ class EditorController extends ChangeNotifier {
     await _restoreAudioEffects();
   }
 
+  Future<void> applyAudioEffects(
+    AudioEffects effects, {
+    bool startPlayback = false,
+  }) async {
+    final audio = project?.audio;
+    if (audio == null) return;
+
+    String targetPath = audio.path;
+    if (effects.hasPitchOrReverb) {
+      targetPath = await ffmpeg.renderProcessedAudio(audio.path, effects);
+    }
+
+    if (playback.mediaPath != targetPath) {
+      await playback.switchAudioSource(targetPath);
+    }
+    await playback.setSpeed(effects.speed);
+
+    updateProjectSettings(
+      project!.settings.copyWith(audioEffects: effects),
+      description: 'Hiệu ứng âm thanh',
+    );
+
+    if (startPlayback && !playback.isPlaying) {
+      await playback.play();
+    }
+    notifyListeners();
+  }
+
   Future<void> _restoreAudioEffects() async {
     final settings = project?.settings;
-    if (settings == null || project?.audio == null) return;
+    final audio = project?.audio;
+    if (settings == null || audio == null) return;
     try {
-      await playback.applyAudioEffects(settings.audioEffects);
+      if (settings.audioEffects.hasPitchOrReverb) {
+        final targetPath = await ffmpeg.renderProcessedAudio(
+          audio.path,
+          settings.audioEffects,
+        );
+        if (playback.mediaPath != targetPath) {
+          await playback.switchAudioSource(targetPath);
+        }
+      } else if (playback.mediaPath != audio.path) {
+        await playback.switchAudioSource(audio.path);
+      }
+      await playback.setSpeed(settings.audioEffects.speed);
     } catch (error) {
-      lastError = 'Không khôi phục được hiệu ứng nghe thử: $error';
+      lastError = 'Không khôi phục được hiệu ứng âm thanh: $error';
       notifyListeners();
     }
   }
