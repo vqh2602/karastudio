@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../models/project_model.dart';
+import '../../models/audio_effects.dart';
 import '../waveform/waveform_cache.dart';
 
 class FfmpegException implements Exception {
@@ -335,6 +336,7 @@ class FfmpegService {
     required double fps,
     String? audioPath,
     String? backgroundVideoPath,
+    AudioEffects audioEffects = const AudioEffects(),
     int startUs = 0,
     bool isTransparent = false,
     String format = 'mp4', // 'mp4', 'mov', 'webm'
@@ -382,7 +384,7 @@ class FfmpegService {
     if (hasBackgroundVideo) {
       args.addAll([
         '-filter_complex',
-        '[1:v]scale=$width:$height:force_original_aspect_ratio=increase,'
+        '[1:v]setpts=(PTS-STARTPTS)/${audioEffects.speed},scale=$width:$height:force_original_aspect_ratio=increase,'
             'crop=$width:$height,setsar=1[background];'
             '[background][0:v]overlay=0:0:shortest=1:format=auto[video]',
         '-map',
@@ -394,6 +396,9 @@ class FfmpegService {
 
     if (hasAudio) {
       args.addAll(['-map', '${hasBackgroundVideo ? 2 : 1}:a:0?']);
+      if (audioEffects.exportFilterGraph.isNotEmpty) {
+        args.addAll(['-af', audioEffects.exportFilterGraph]);
+      }
     }
 
     if (isTransparent) {

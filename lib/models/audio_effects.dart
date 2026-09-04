@@ -1,20 +1,22 @@
 import 'dart:math' as math;
 
-/// Non-destructive monitoring effects; source files and export stay unchanged.
+/// Non-destructive audio settings shared by playback and video export.
 class AudioEffects {
   const AudioEffects({
     this.semitones = 0,
     this.reverb = 0,
     this.tuningHz = 440,
+    this.speed = 1,
   });
 
   final int semitones;
   final double reverb;
   final double tuningHz;
+  final double speed;
 
   double get pitchRatio => math.pow(2, semitones / 12) * tuningHz / 440;
 
-  String get mpvFilters {
+  String get filterGraph {
     final filters = <String>[];
     if ((pitchRatio - 1).abs() > 0.000001) {
       // Bundled libmpv does not include Rubber Band on all desktops.
@@ -38,16 +40,28 @@ class AudioEffects {
       ].map((decay) => (decay * wet).toStringAsFixed(4)).join('|');
       filters.add('aecho=0.7:0.8:37|61|89|127:$decays');
     }
-    return filters.isEmpty ? '' : 'lavfi=[${filters.join(',')}]';
+    return filters.join(',');
   }
+
+  String get mpvFilters => filterGraph.isEmpty ? '' : 'lavfi=[$filterGraph]';
+
+  String get exportFilterGraph => [
+    if (filterGraph.isNotEmpty) filterGraph,
+    if (speed != 1) ...[
+      'atempo=${math.sqrt(speed).toStringAsFixed(8)}',
+      'atempo=${math.sqrt(speed).toStringAsFixed(8)}',
+    ],
+  ].join(',');
 
   Map<String, Object?> toJson() => {
     'semitones': semitones,
     'reverb': reverb,
     'tuningHz': tuningHz,
+    'speed': speed,
   };
 
   factory AudioEffects.fromJson(Map<String, Object?> json) => AudioEffects(
+    speed: ((json['speed'] as num?)?.toDouble() ?? 1).clamp(0.25, 4),
     semitones: ((json['semitones'] as num?)?.toInt() ?? 0).clamp(-12, 12),
     reverb: ((json['reverb'] as num?)?.toDouble() ?? 0).clamp(0, 100),
     tuningHz: ((json['tuningHz'] as num?)?.toDouble() ?? 440).clamp(

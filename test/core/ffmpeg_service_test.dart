@@ -1,9 +1,82 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:karastudio/core/ffmpeg/ffmpeg_service.dart';
+import 'package:karastudio/models/audio_effects.dart';
 
 void main() {
+  test('video encoder applies pitch and speed to the exported audio', () async {
+    final service = FfmpegService();
+    final ffmpeg = await service.getFfmpegPath();
+    final dir = await Directory.systemTemp.createTemp('kara-export-fx-');
+    try {
+      final audio = '${dir.path}/tone.wav';
+      final output = '${dir.path}/out.mp4';
+      final generated = await Process.run(ffmpeg, [
+        '-v',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=2',
+        audio,
+      ]);
+      expect(generated.exitCode, 0);
+      final process = await service.startRawRgbaVideoEncoder(
+        outputPath: output,
+        width: 16,
+        height: 16,
+        fps: 10,
+        audioPath: audio,
+        audioEffects: const AudioEffects(semitones: 12, speed: 2),
+      );
+      final errors = process.stderr
+          .transform(const SystemEncoding().decoder)
+          .join();
+      final stdoutDone = process.stdout.drain<void>();
+      for (var i = 0; i < 10; i++) {
+        process.stdin.add(Uint8List(16 * 16 * 4));
+      }
+      await process.stdin.close();
+      expect(await process.exitCode, 0, reason: await errors);
+      await stdoutDone;
+      final metadata = await service.probeVideo(output);
+      expect(metadata.durationUs, closeTo(1000000, 150000));
+      final decoded = await Process.run(ffmpeg, [
+        '-v',
+        'error',
+        '-i',
+        output,
+        '-ss',
+        '0.2',
+        '-t',
+        '0.5',
+        '-f',
+        's16le',
+        '-ac',
+        '1',
+        '-ar',
+        '48000',
+        'pipe:1',
+      ], stdoutEncoding: null);
+      expect(decoded.exitCode, 0);
+      final bytes = ByteData.sublistView(
+        Uint8List.fromList(decoded.stdout as List<int>),
+      );
+      var crossings = 0;
+      for (var i = 2; i < bytes.lengthInBytes; i += 2) {
+        if (bytes.getInt16(i - 2, Endian.little) <= 0 &&
+            bytes.getInt16(i, Endian.little) > 0) {
+          crossings++;
+        }
+      }
+      final hz = crossings / (bytes.lengthInBytes / 2 / 48000);
+      expect(hz, closeTo(880, 15));
+    } finally {
+      await dir.delete(recursive: true);
+    }
+  });
   test('probes a real generated audio file', () async {
     final service = FfmpegService();
     String ffmpegPath;

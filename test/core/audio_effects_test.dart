@@ -3,6 +3,13 @@ import 'package:karastudio/models/audio_effects.dart';
 import 'package:karastudio/models/project_model.dart';
 
 void main() {
+  test('export shares pitch and reverb, and compensates selected speed', () {
+    const fx = AudioEffects(semitones: 12, reverb: 50, speed: 2);
+    expect(fx.mpvFilters, 'lavfi=[${fx.filterGraph}]');
+    expect(fx.exportFilterGraph, startsWith(fx.filterGraph));
+    expect(fx.exportFilterGraph, contains('atempo=1.41421356'));
+    expect(AudioEffects.fromJson(fx.toJson()).speed, 2);
+  });
   test('pitch tuning uses semitone ratio without changing speed', () {
     expect(const AudioEffects(semitones: 12).pitchRatio, closeTo(2, 1e-8));
     expect(const AudioEffects(semitones: -12).pitchRatio, closeTo(0.5, 1e-8));

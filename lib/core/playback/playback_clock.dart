@@ -351,6 +351,7 @@ class PlaybackClock extends ChangeNotifier {
     if (effects.mpvFilters.isNotEmpty && !applied.contains('lavfi')) {
       throw StateError('Bộ phát chưa hỗ trợ bộ lọc âm thanh.');
     }
+    await setSpeed(effects.speed);
   }
 
   Future<void> closeMedia() async {

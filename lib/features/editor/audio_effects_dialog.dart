@@ -46,6 +46,7 @@ class _AudioEffectsDialogState extends State<_AudioEffectsDialog> {
         semitones: semitones,
         reverb: reverb,
         tuningHz: tuning,
+        speed: speed,
       );
       await widget.editor.playback.applyAudioEffects(fx);
       await widget.editor.playback.setSpeed(speed);
@@ -136,7 +137,7 @@ class _AudioEffectsDialogState extends State<_AudioEffectsDialog> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-              'Nghe thử • Không thay đổi file gốc hoặc âm thanh xuất video.',
+              'Áp dụng cho nghe thử và xuất video. File gốc được giữ nguyên.',
               style: TextStyle(fontSize: 12),
             ),
             control(

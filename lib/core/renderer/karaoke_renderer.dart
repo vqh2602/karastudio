@@ -6,6 +6,16 @@ import '../../models/project_model.dart';
 import '../effects/karaoke_effects.dart';
 import '../indicators/signal_indicator.dart';
 
+/// Uses the recorded source timeline directly, with no easing or guessed end.
+double tokenSweepProgress(LyricToken token, int timeUs) {
+  final start = token.startUs;
+  final end = token.endUs;
+  if (start == null || timeUs < start) return 0;
+  if (end == null) return 0;
+  if (end <= start) return 1;
+  return ((timeUs - start) / (end - start)).clamp(0.0, 1.0);
+}
+
 class TokenRenderBounds {
   const TokenRenderBounds({
     required this.token,
@@ -267,29 +277,23 @@ class KaraokeRenderer {
       final tokenIndexInLine = line.text.indexOf(token.text, searchStart);
       if (tokenIndexInLine >= 0) {
         searchStart = tokenIndexInLine + token.text.length;
-        final startOffset = painter.getOffsetForCaret(
-          TextPosition(offset: tokenIndexInLine),
-          Rect.zero,
-        );
-        final endOffset = painter.getOffsetForCaret(
-          TextPosition(offset: tokenIndexInLine + token.text.length),
-          Rect.zero,
-        );
-
-        final tokenRect = Rect.fromLTWH(
-          origin.dx + startOffset.dx,
-          origin.dy + startOffset.dy,
-          math.max(1, endOffset.dx - startOffset.dx),
-          painter.height,
-        );
-
-        tokenBounds.add(
-          TokenRenderBounds(
-            token: token,
-            rect: tokenRect,
-            charBounds: const [],
+        // Caret at a wrapped word's end can be on the following row, producing
+        // a 1px-wide clip. Use the actual glyph selection boxes instead.
+        final boxes = painter.getBoxesForSelection(
+          TextSelection(
+            baseOffset: tokenIndexInLine,
+            extentOffset: tokenIndexInLine + token.text.length,
           ),
         );
+        for (final box in boxes) {
+          tokenBounds.add(
+            TokenRenderBounds(
+              token: token,
+              rect: box.toRect().shift(origin),
+              charBounds: const [],
+            ),
+          );
+        }
       }
     }
 
@@ -468,20 +472,31 @@ class KaraokeRenderer {
 
       for (final tb in layout.tokenBounds) {
         final token = tb.token;
-        final tStart = token.startUs ?? lineStartUs;
-        final tEnd = token.endUs ?? (tStart + 500000);
-
-        if (timeUs < tStart) continue; // Not started yet
-
-        final progress = (tEnd > tStart)
-            ? ((timeUs - tStart) / (tEnd - tStart)).clamp(0.0, 1.0)
-            : 1.0;
+        final tStart = token.startUs;
+        if (tStart == null || timeUs < tStart) continue;
+        final progress = tokenSweepProgress(token, timeUs);
 
         // Local coordinate relative to line layout
         final localX = tb.rect.left - layout.origin.dx;
         final localY = tb.rect.top - layout.origin.dy;
         final localW = tb.rect.width;
         final localH = tb.rect.height;
+
+        // Mark the active word immediately at its recorded onset. Long held
+        // notes still sweep over their full duration, but no longer appear idle
+        // while the first few pixels of the sweep are invisible.
+        if (token.endUs == null || timeUs < token.endUs!) {
+          canvas.save();
+          canvas.clipRect(Rect.fromLTWH(localX, localY, localW, localH));
+          _paintTextWithStyle(
+            canvas: canvas,
+            layout: layout,
+            paint: activePaint,
+            alphaMultiplier: effectTransform.opacity * 0.45,
+          );
+          canvas.restore();
+        }
+        if (progress <= 0) continue;
 
         Rect clipRect;
         switch (style.sweepDirection) {
@@ -565,6 +580,7 @@ class KaraokeRenderer {
     required Paint paint,
     double alphaMultiplier = 1.0,
   }) {
+    final originalColor = paint.color;
     if (alphaMultiplier < 1.0) {
       paint.color = paint.color.withValues(
         alpha: paint.color.a * alphaMultiplier.clamp(0.0, 1.0),
@@ -581,9 +597,12 @@ class KaraokeRenderer {
       text: styledSpan,
       textDirection: layout.textPainter.textDirection,
       textAlign: layout.textPainter.textAlign,
-    )..layout(maxWidth: layout.totalSize.width + 10);
+    )..layout(maxWidth: layout.totalSize.width);
 
     painter.paint(canvas, Offset.zero);
+    // The same fill is reused across words: opacity must not accumulate.
+    paint.color = originalColor;
+    painter.dispose();
   }
 
   void _drawSafeAreas(Canvas canvas, Size size) {

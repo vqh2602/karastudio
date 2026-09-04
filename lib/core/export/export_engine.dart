@@ -186,7 +186,9 @@ class ExportEngine {
     final effectiveEndUs =
         endUs ?? project.audio?.durationUs ?? project.video?.durationUs ?? 0;
     final totalDurationUs = math.max(1000000, effectiveEndUs - startUs);
-    final totalFrames = (totalDurationUs * fps / 1000000).round();
+    final exportSpeed = project.settings.audioEffects.speed;
+    final totalFrames = (totalDurationUs * fps / (1000000 * exportSpeed))
+        .round();
 
     final isTransparent =
         format == 'mov' || format == 'webm' || format == 'png_seq';
@@ -213,6 +215,7 @@ class ExportEngine {
         fps: fps,
         audioPath: isTransparent ? null : project.audio?.path,
         backgroundVideoPath: backgroundVideoPath,
+        audioEffects: project.settings.audioEffects,
         startUs: startUs,
         isTransparent: isTransparent,
         format: format,
@@ -245,7 +248,7 @@ class ExportEngine {
           throw Exception('Quá trình xuất đã bị hủy bởi người dùng.');
         }
 
-        final t = startUs + ((f * 1000000) / fps).round();
+        final t = startUs + ((f * 1000000 * exportSpeed) / fps).round();
 
         // 1. Offscreen Render Skia Picture
         final recorder = ui.PictureRecorder();
