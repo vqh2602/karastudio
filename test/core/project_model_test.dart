@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:karastudio/core/serialization/project_serializer.dart';
 import 'package:karastudio/models/project_model.dart';
 
 void main() {
@@ -50,5 +53,71 @@ void main() {
       () => ProjectModel.fromJson({'format': 'Other'}),
       throwsFormatException,
     );
+  });
+
+  test('restores built-in styles when opening a legacy project', () {
+    final json = ProjectModel.create('Legacy').toJson()..remove('styles');
+
+    final loaded = ProjectModel.fromJson(json);
+
+    expect(loaded.styles, isNotEmpty);
+    expect(loaded.styles.first.id, 'classic');
+  });
+
+  test('saves and reloads every subtitle style property', () async {
+    const customStyle = SubtitleStyle(
+      id: 'classic',
+      name: 'My saved style',
+      fontFamily: 'Avenir Next',
+      fontSize: 73,
+      fontWeight: 800,
+      isItalic: true,
+      isUnderline: true,
+      alignment: SubtitleAlignment.right,
+      letterSpacing: 2.5,
+      wordSpacing: 7,
+      lineHeight: 1.45,
+      inactiveColorValue: 0xFF123456,
+      inactiveSecondaryColorValue: 0xFF654321,
+      inactiveUseGradient: true,
+      activeColorValue: 0xFFABCDEF,
+      activeSecondaryColorValue: 0xFF112233,
+      activeUseGradient: true,
+      outlineColorValue: 0xFF010203,
+      outlineWidth: 5.5,
+      outlineColorValue2: 0xFF040506,
+      outlineWidth2: 1.5,
+      shadowColorValue: 0x88070809,
+      shadowBlur: 9,
+      shadowOffsetX: 3,
+      shadowOffsetY: 4,
+      glowColorValue: 0xFF00EEFF,
+      glowRadius: 11,
+      glowIntensity: 0.75,
+      scaleX: 1.1,
+      scaleY: 0.9,
+      rotationZ: 2,
+      skewX: 1,
+      skewY: -1,
+      sweepDirection: SweepDirection.centerOut,
+    );
+    final project = ProjectModel.create(
+      'Style persistence',
+    ).copyWith(styles: const [customStyle]);
+    final directory = await Directory.systemTemp.createTemp(
+      'karastudio-style-test-',
+    );
+    final path = '${directory.path}/style.karastudio';
+
+    try {
+      const serializer = ProjectSerializer();
+      await serializer.save(project, path);
+      final loaded = await serializer.load(path);
+
+      expect(loaded.styles, hasLength(1));
+      expect(loaded.styles.single.toJson(), customStyle.toJson());
+    } finally {
+      await directory.delete(recursive: true);
+    }
   });
 }

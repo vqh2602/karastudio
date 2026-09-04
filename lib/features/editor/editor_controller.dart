@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/ffmpeg/ffmpeg_service.dart';
 import '../../core/playback/playback_clock.dart';
 import '../../core/serialization/project_serializer.dart';
+import '../../core/timing/timing_engine.dart';
 import '../../core/undo_redo/undo_redo_manager.dart';
 import '../../core/waveform/waveform_cache.dart';
 import '../../models/project_model.dart';
@@ -22,9 +22,9 @@ final editorControllerProvider = ChangeNotifierProvider<EditorController>((
   ref,
 ) {
   final controller = EditorController(
-    serializer: ref.watch(projectSerializerProvider),
-    ffmpeg: ref.watch(ffmpegServiceProvider),
-    playback: ref.watch(playbackClockProvider),
+    serializer: ref.read(projectSerializerProvider),
+    ffmpeg: ref.read(ffmpegServiceProvider),
+    playback: ref.read(playbackClockProvider),
   );
   return controller;
 });
@@ -40,6 +40,7 @@ class EditorController extends ChangeNotifier {
   final FfmpegService ffmpeg;
   final PlaybackClock playback;
   final UndoRedoManager history = UndoRedoManager(capacity: 100);
+  final TimingEngine timingEngine = const TimingEngine();
 
   ProjectModel? project;
   String? projectPath;
@@ -49,6 +50,7 @@ class EditorController extends ChangeNotifier {
   double taskProgress = 0;
   String status = 'Sẵn sàng';
   String? lastError;
+  String? selectedLyricLineId;
   Timer? _autosaveTimer;
 
   bool get hasProject => project != null;
@@ -74,6 +76,7 @@ class EditorController extends ChangeNotifier {
     );
     projectPath = null;
     waveform = null;
+    selectedLyricLineId = null;
     history.clear();
     isDirty = true;
     status = 'Đã tạo project mới';
@@ -98,6 +101,7 @@ class EditorController extends ChangeNotifier {
       final loaded = await serializer.load(path);
       await playback.closeMedia();
       project = loaded;
+      selectedLyricLineId = null;
       projectPath = path;
       waveform = null;
       history.clear();
@@ -124,6 +128,16 @@ class EditorController extends ChangeNotifier {
               notifyListeners();
             },
           );
+        }
+      }
+      final video = loaded.video;
+      if (video != null && await File(video.path).exists()) {
+        await playback.openVideo(video.path);
+      } else {
+        await playback.closeVideo();
+        if (video != null) {
+          final message = 'Không tìm thấy video tham chiếu: ${video.path}';
+          lastError = lastError == null ? message : '$lastError\n$message';
         }
       }
       _scheduleAutosave();
@@ -211,10 +225,12 @@ class EditorController extends ChangeNotifier {
           onExecute: () {
             project = after;
             waveform = generated;
+            notifyListeners();
           },
           onUndo: () {
             project = before;
             waveform = beforeWaveform;
+            notifyListeners();
           },
         ),
       );
@@ -224,16 +240,334 @@ class EditorController extends ChangeNotifier {
     });
   }
 
+  Future<bool> importBackgroundVideo() async {
+    if (project == null) {
+      lastError = 'Hãy tạo hoặc mở project trước.';
+      notifyListeners();
+      return false;
+    }
+    final result = await FilePicker.platform.pickFiles(
+      dialogTitle: 'Import Background Video (Tự động tắt tiếng)',
+      type: FileType.custom,
+      allowedExtensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'],
+      lockParentWindow: true,
+    );
+    final path = result?.files.single.path;
+    if (path == null) return false;
+
+    return _guarded('Đang import video nền…', () async {
+      final videoAsset = await ffmpeg.probeVideo(path);
+      final before = project!;
+      final after = before.copyWith(
+        video: videoAsset,
+        clearBackgroundImage: true,
+        modifiedAt: DateTime.now().toUtc(),
+      );
+
+      history.execute(
+        CallbackCommand(
+          description: 'Import video nền',
+          onExecute: () {
+            project = after;
+            isDirty = true;
+            notifyListeners();
+          },
+          onUndo: () {
+            project = before;
+            isDirty = true;
+            notifyListeners();
+          },
+        ),
+      );
+      await playback.openVideo(path);
+      status = 'Đã đặt video nền: ${p.basename(path)}';
+    });
+  }
+
+  Future<bool> importBackgroundImage() async {
+    if (project == null) {
+      lastError = 'Hãy tạo hoặc mở project trước.';
+      notifyListeners();
+      return false;
+    }
+    final result = await FilePicker.platform.pickFiles(
+      dialogTitle: 'Import Background Image',
+      type: FileType.custom,
+      allowedExtensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp'],
+      lockParentWindow: true,
+    );
+    final path = result?.files.single.path;
+    if (path == null) return false;
+
+    return _guarded('Đang import hình nền…', () async {
+      final imageAsset = MediaAsset(
+        id: newId('image'),
+        type: MediaType.image,
+        path: path,
+      );
+      final before = project!;
+      final after = before.copyWith(
+        backgroundImage: imageAsset,
+        clearVideo: true,
+        modifiedAt: DateTime.now().toUtc(),
+      );
+
+      history.execute(
+        CallbackCommand(
+          description: 'Import hình nền',
+          onExecute: () {
+            project = after;
+            isDirty = true;
+            notifyListeners();
+          },
+          onUndo: () {
+            project = before;
+            isDirty = true;
+            notifyListeners();
+          },
+        ),
+      );
+      await playback.closeVideo();
+      status = 'Đã đặt hình nền: ${p.basename(path)}';
+    });
+  }
+
+  void removeBackground() {
+    if (project == null) return;
+    final before = project!;
+    final after = before.copyWith(
+      clearVideo: true,
+      clearBackgroundImage: true,
+      modifiedAt: DateTime.now().toUtc(),
+    );
+
+    history.execute(
+      CallbackCommand(
+        description: 'Xóa background nền',
+        onExecute: () {
+          project = after;
+          isDirty = true;
+          notifyListeners();
+        },
+        onUndo: () {
+          project = before;
+          isDirty = true;
+          notifyListeners();
+        },
+      ),
+    );
+    playback.closeVideo();
+    status = 'Đã xóa nền';
+  }
+
+  void updateLyricLines(List<LyricLine> newLines, {String? description}) {
+    if (project == null) return;
+    final before = project!;
+    final safeLines = newLines
+        .map(timingEngine.preventTokenOverlaps)
+        .toList(growable: false);
+    final after = before.copyWith(
+      lyricLines: safeLines,
+      modifiedAt: DateTime.now().toUtc(),
+    );
+
+    history.execute(
+      CallbackCommand(
+        description: description ?? 'Sửa lyrics',
+        onExecute: () {
+          project = after;
+          isDirty = true;
+          notifyListeners();
+        },
+        onUndo: () {
+          project = before;
+          isDirty = true;
+          notifyListeners();
+        },
+      ),
+    );
+  }
+
+  int? get selectedLyricLineIndex {
+    final selectedId = selectedLyricLineId;
+    final lines = project?.lyricLines;
+    if (selectedId == null || lines == null) return null;
+    final index = lines.indexWhere((line) => line.id == selectedId);
+    return index < 0 ? null : index;
+  }
+
+  void selectLyricLine(int index) {
+    final lines = project?.lyricLines;
+    if (lines == null || index < 0 || index >= lines.length) return;
+    final nextId = lines[index].id;
+    if (selectedLyricLineId == nextId) return;
+    selectedLyricLineId = nextId;
+    notifyListeners();
+  }
+
+  void updateProjectStyles(
+    List<SubtitleStyle> newStyles, {
+    String? description,
+  }) {
+    if (project == null) return;
+    final before = project!;
+    final after = before.copyWith(
+      styles: newStyles,
+      modifiedAt: DateTime.now().toUtc(),
+    );
+
+    history.execute(
+      CallbackCommand(
+        description: description ?? 'Sửa styles',
+        onExecute: () {
+          project = after;
+          isDirty = true;
+          notifyListeners();
+        },
+        onUndo: () {
+          project = before;
+          isDirty = true;
+          notifyListeners();
+        },
+      ),
+    );
+  }
+
+  void updateProjectActors(List<Actor> newActors, {String? description}) {
+    if (project == null) return;
+    final before = project!;
+    final after = before.copyWith(
+      actors: newActors,
+      modifiedAt: DateTime.now().toUtc(),
+    );
+
+    history.execute(
+      CallbackCommand(
+        description: description ?? 'Sửa actors',
+        onExecute: () {
+          project = after;
+          isDirty = true;
+          notifyListeners();
+        },
+        onUndo: () {
+          project = before;
+          isDirty = true;
+          notifyListeners();
+        },
+      ),
+    );
+  }
+
+  void updateProjectSettings(
+    ProjectSettings newSettings, {
+    String? description,
+  }) {
+    if (project == null) return;
+    final before = project!;
+    final after = before.copyWith(
+      settings: newSettings,
+      modifiedAt: DateTime.now().toUtc(),
+    );
+
+    history.execute(
+      CallbackCommand(
+        description: description ?? 'Sửa settings',
+        onExecute: () {
+          project = after;
+          isDirty = true;
+          notifyListeners();
+        },
+        onUndo: () {
+          project = before;
+          isDirty = true;
+          notifyListeners();
+        },
+      ),
+    );
+  }
+
+  void addMarker(int timeUs, {String? name}) {
+    if (project == null) return;
+    final markerName = name ?? 'Marker ${project!.markers.length + 1}';
+    final newMarker = MarkerModel(
+      id: newId('marker'),
+      timeUs: timeUs,
+      name: markerName,
+    );
+    final updated = List<MarkerModel>.from(project!.markers)..add(newMarker);
+    final before = project!;
+    final after = before.copyWith(markers: updated);
+
+    history.execute(
+      CallbackCommand(
+        description: 'Thêm marker',
+        onExecute: () {
+          project = after;
+          isDirty = true;
+          notifyListeners();
+        },
+        onUndo: () {
+          project = before;
+          isDirty = true;
+          notifyListeners();
+        },
+      ),
+    );
+  }
+
+  void fixTimingOverlaps() {
+    if (project == null) return;
+    final fixed = timingEngine.autoFixOverlaps(project!);
+    updateLyricLines(fixed.lyricLines, description: 'Tự động sửa lỗi overlap');
+  }
+
+  void resetRecordingTiming({int startLineIndex = 0}) {
+    final current = project;
+    if (current == null || current.lyricLines.isEmpty) return;
+    final start = startLineIndex.clamp(0, current.lyricLines.length - 1);
+    final updated = timingEngine.clearTimingFrom(
+      current.lyricLines,
+      startLineIndex: start,
+    );
+    updateLyricLines(
+      updated,
+      description: start == 0
+          ? 'Reset toàn bộ timing'
+          : 'Reset timing từ câu ${start + 1}',
+    );
+    status = start == 0
+        ? 'Đã reset toàn bộ timing'
+        : 'Đã reset timing từ câu ${start + 1}';
+  }
+
+  void shiftTiming({
+    required int deltaMs,
+    int? fromLineIndex,
+    int? singleLineIndex,
+  }) {
+    final current = project;
+    if (current == null || current.lyricLines.isEmpty || deltaMs == 0) return;
+
+    final deltaUs = deltaMs * 1000;
+    final updated = timingEngine.shiftTiming(
+      lines: current.lyricLines,
+      deltaUs: deltaUs,
+      fromLineIndex: fromLineIndex,
+      singleLineIndex: singleLineIndex,
+    );
+
+    final desc = deltaMs > 0
+        ? 'Dịch chậm timing +${deltaMs}ms'
+        : 'Dịch sớm timing ${deltaMs}ms';
+    updateLyricLines(updated, description: desc);
+    status = 'Đã dịch chuyển timing ($desc)';
+  }
+
   void undo() {
     if (!history.canUndo) return;
     history.undo();
     isDirty = true;
-    final audio = project?.audio;
-    if (audio == null) {
-      unawaited(playback.closeMedia());
-    } else if (playback.mediaPath != audio.path) {
-      unawaited(playback.open(audio.path));
-    }
+    unawaited(_syncPlaybackMediaToProject());
     status = 'Đã hoàn tác';
     notifyListeners();
   }
@@ -242,12 +576,27 @@ class EditorController extends ChangeNotifier {
     if (!history.canRedo) return;
     history.redo();
     isDirty = true;
-    final audio = project?.audio;
-    if (audio != null && playback.mediaPath != audio.path) {
-      unawaited(playback.open(audio.path));
-    }
+    unawaited(_syncPlaybackMediaToProject());
     status = 'Đã làm lại';
     notifyListeners();
+  }
+
+  Future<void> _syncPlaybackMediaToProject() async {
+    final audio = project?.audio;
+    if (audio == null) {
+      if (playback.mediaPath != null) await playback.closeAudio();
+    } else if (playback.mediaPath != audio.path &&
+        await File(audio.path).exists()) {
+      await playback.open(audio.path);
+    }
+
+    final video = project?.video;
+    if (video == null) {
+      if (playback.videoPath != null) await playback.closeVideo();
+    } else if (playback.videoPath != video.path &&
+        await File(video.path).exists()) {
+      await playback.openVideo(video.path);
+    }
   }
 
   String? takeError() {
@@ -313,8 +662,18 @@ class EditorController extends ChangeNotifier {
       .trim()
       .replaceAll(RegExp(r'\s+'), ' ');
 
+  bool _isDisposed = false;
+
+  @override
+  void notifyListeners() {
+    if (!_isDisposed) {
+      super.notifyListeners();
+    }
+  }
+
   @override
   void dispose() {
+    _isDisposed = true;
     _autosaveTimer?.cancel();
     super.dispose();
   }

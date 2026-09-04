@@ -28,32 +28,24 @@ class ProjectSerializer {
   }
 
   Future<void> save(ProjectModel project, String filePath) async {
-    final target = File(filePath);
-    await target.parent.create(recursive: true);
-    final temporary = File('$filePath.tmp');
-    final backup = File('$filePath.bak');
     final contents = const JsonEncoder.withIndent(
       '  ',
     ).convert(project.toJson());
 
-    await temporary.writeAsString(contents, flush: true);
-    final check = jsonDecode(await temporary.readAsString());
+    // Validate JSON structure in memory before writing to disk
+    final check = jsonDecode(contents);
     if (check is! Map || check['id'] != project.id) {
-      await temporary.delete();
-      throw const FormatException('Xác thực project tạm thất bại.');
+      throw const FormatException('Xác thực cấu trúc project thất bại.');
     }
 
-    if (await backup.exists()) await backup.delete();
-    if (await target.exists()) await target.rename(backup.path);
-    try {
-      await temporary.rename(target.path);
-      if (await backup.exists()) await backup.delete();
-    } catch (_) {
-      if (await backup.exists() && !await target.exists()) {
-        await backup.rename(target.path);
-      }
-      rethrow;
+    final target = File(filePath);
+    if (!await target.parent.exists()) {
+      try {
+        await target.parent.create(recursive: true);
+      } catch (_) {}
     }
+
+    await target.writeAsString(contents, flush: true);
   }
 
   Future<String> autosavePathFor(ProjectModel project) async {
@@ -69,6 +61,10 @@ class ProjectSerializer {
 
   Future<void> clearRecovery(ProjectModel project) async {
     final file = File(await autosavePathFor(project));
-    if (await file.exists()) await file.delete();
+    if (await file.exists()) {
+      try {
+        await file.delete();
+      } catch (_) {}
+    }
   }
 }

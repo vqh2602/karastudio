@@ -33,17 +33,28 @@ class MediaAsset {
   final String? proxyPath;
   final Map<String, String> metadata;
 
-  MediaAsset copyWith({String? waveformCachePath}) => MediaAsset(
-    id: id,
-    type: type,
-    path: path,
-    durationUs: durationUs,
-    sampleRate: sampleRate,
-    channels: channels,
-    codec: codec,
+  MediaAsset copyWith({
+    String? id,
+    MediaType? type,
+    String? path,
+    String? waveformCachePath,
+    String? proxyPath,
+    int? durationUs,
+    int? sampleRate,
+    int? channels,
+    String? codec,
+    Map<String, String>? metadata,
+  }) => MediaAsset(
+    id: id ?? this.id,
+    type: type ?? this.type,
+    path: path ?? this.path,
+    durationUs: durationUs ?? this.durationUs,
+    sampleRate: sampleRate ?? this.sampleRate,
+    channels: channels ?? this.channels,
+    codec: codec ?? this.codec,
     waveformCachePath: waveformCachePath ?? this.waveformCachePath,
-    proxyPath: proxyPath,
-    metadata: metadata,
+    proxyPath: proxyPath ?? this.proxyPath,
+    metadata: metadata ?? this.metadata,
   );
 
   Map<String, Object?> toJson() => {
@@ -90,6 +101,24 @@ class LyricToken {
   final int? startUs;
   final int? endUs;
 
+  bool get isTimed => startUs != null && endUs != null && endUs! >= startUs!;
+  int get durationUs => (isTimed ? endUs! - startUs! : 0);
+
+  LyricToken copyWith({
+    String? id,
+    String? text,
+    int? index,
+    int? startUs,
+    int? endUs,
+    bool clearTiming = false,
+  }) => LyricToken(
+    id: id ?? this.id,
+    text: text ?? this.text,
+    index: index ?? this.index,
+    startUs: clearTiming ? null : (startUs ?? this.startUs),
+    endUs: clearTiming ? null : (endUs ?? this.endUs),
+  );
+
   Map<String, Object?> toJson() => {
     'id': id,
     'text': text,
@@ -107,6 +136,8 @@ class LyricToken {
   );
 }
 
+enum TimingStatus { untimed, lineTimed, wordTimed, error }
+
 class LyricLine {
   const LyricLine({
     required this.id,
@@ -116,11 +147,13 @@ class LyricLine {
     this.endUs,
     this.tokens = const [],
     this.styleId = 'classic',
-    this.positionX = .5,
-    this.positionY = .84,
+    this.positionX = 0.5,
+    this.positionY = 0.84,
     this.lineEffect = 'runningColor',
     this.transitionIn = 'none',
     this.transitionOut = 'none',
+    this.rowAssignment = 'auto',
+    this.indicatorEnabled = true,
   });
 
   final String id;
@@ -135,6 +168,74 @@ class LyricLine {
   final String lineEffect;
   final String transitionIn;
   final String transitionOut;
+  final String rowAssignment;
+  final bool indicatorEnabled;
+
+  bool get isTimed => startUs != null && endUs != null && endUs! >= startUs!;
+  int get durationUs => (isTimed ? endUs! - startUs! : 0);
+
+  TimingStatus get timingStatus {
+    if (startUs == null &&
+        endUs == null &&
+        tokens.every((t) => t.startUs == null)) {
+      return TimingStatus.untimed;
+    }
+    if (startUs != null && endUs != null && endUs! < startUs!) {
+      return TimingStatus.error;
+    }
+    for (final token in tokens) {
+      if (token.startUs != null &&
+          token.endUs != null &&
+          token.endUs! < token.startUs!) {
+        return TimingStatus.error;
+      }
+    }
+    final timedTokensCount = tokens.where((t) => t.isTimed).length;
+    if (timedTokensCount == tokens.length && tokens.isNotEmpty) {
+      return TimingStatus.wordTimed;
+    }
+    if (isTimed) {
+      return TimingStatus.lineTimed;
+    }
+    return TimingStatus.untimed;
+  }
+
+  LyricLine copyWith({
+    String? id,
+    String? text,
+    String? actorId,
+    int? startUs,
+    int? endUs,
+    List<LyricToken>? tokens,
+    String? styleId,
+    double? positionX,
+    double? positionY,
+    String? lineEffect,
+    String? transitionIn,
+    String? transitionOut,
+    String? rowAssignment,
+    bool? indicatorEnabled,
+    bool clearTiming = false,
+  }) => LyricLine(
+    id: id ?? this.id,
+    text: text ?? this.text,
+    actorId: actorId ?? this.actorId,
+    startUs: clearTiming ? null : (startUs ?? this.startUs),
+    endUs: clearTiming ? null : (endUs ?? this.endUs),
+    tokens: clearTiming
+        ? (tokens ?? this.tokens)
+              .map((t) => t.copyWith(clearTiming: true))
+              .toList()
+        : (tokens ?? this.tokens),
+    styleId: styleId ?? this.styleId,
+    positionX: positionX ?? this.positionX,
+    positionY: positionY ?? this.positionY,
+    lineEffect: lineEffect ?? this.lineEffect,
+    transitionIn: transitionIn ?? this.transitionIn,
+    transitionOut: transitionOut ?? this.transitionOut,
+    rowAssignment: rowAssignment ?? this.rowAssignment,
+    indicatorEnabled: indicatorEnabled ?? this.indicatorEnabled,
+  );
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -148,6 +249,8 @@ class LyricLine {
     'lineEffect': lineEffect,
     'transitionIn': transitionIn,
     'transitionOut': transitionOut,
+    'rowAssignment': rowAssignment,
+    'indicatorEnabled': indicatorEnabled,
   };
 
   factory LyricLine.fromJson(Map<String, Object?> json) {
@@ -162,11 +265,13 @@ class LyricLine {
           .map((item) => LyricToken.fromJson((item as Map).cast()))
           .toList(),
       styleId: json['styleId'] as String? ?? 'classic',
-      positionX: (position?['x'] as num?)?.toDouble() ?? .5,
-      positionY: (position?['y'] as num?)?.toDouble() ?? .84,
+      positionX: (position?['x'] as num?)?.toDouble() ?? 0.5,
+      positionY: (position?['y'] as num?)?.toDouble() ?? 0.84,
       lineEffect: json['lineEffect'] as String? ?? 'runningColor',
       transitionIn: json['transitionIn'] as String? ?? 'none',
       transitionOut: json['transitionOut'] as String? ?? 'none',
+      rowAssignment: json['rowAssignment'] as String? ?? 'auto',
+      indicatorEnabled: json['indicatorEnabled'] as bool? ?? true,
     );
   }
 }
@@ -177,8 +282,8 @@ class Actor {
     required this.name,
     required this.colorValue,
     required this.styleId,
-    this.positionX = .5,
-    this.positionY = .84,
+    this.positionX = 0.5,
+    this.positionY = 0.84,
     this.indicatorId = 'dots',
     this.defaultEffect = 'runningColor',
   });
@@ -191,6 +296,26 @@ class Actor {
   final double positionY;
   final String indicatorId;
   final String defaultEffect;
+
+  Actor copyWith({
+    String? id,
+    String? name,
+    int? colorValue,
+    String? styleId,
+    double? positionX,
+    double? positionY,
+    String? indicatorId,
+    String? defaultEffect,
+  }) => Actor(
+    id: id ?? this.id,
+    name: name ?? this.name,
+    colorValue: colorValue ?? this.colorValue,
+    styleId: styleId ?? this.styleId,
+    positionX: positionX ?? this.positionX,
+    positionY: positionY ?? this.positionY,
+    indicatorId: indicatorId ?? this.indicatorId,
+    defaultEffect: defaultEffect ?? this.defaultEffect,
+  );
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -209,12 +334,22 @@ class Actor {
       name: json['name'] as String,
       colorValue: (json['colorValue'] as num).toInt(),
       styleId: json['styleId'] as String,
-      positionX: (position?['x'] as num?)?.toDouble() ?? .5,
-      positionY: (position?['y'] as num?)?.toDouble() ?? .84,
+      positionX: (position?['x'] as num?)?.toDouble() ?? 0.5,
+      positionY: (position?['y'] as num?)?.toDouble() ?? 0.84,
       indicatorId: json['indicatorId'] as String? ?? 'dots',
       defaultEffect: json['defaultEffect'] as String? ?? 'runningColor',
     );
   }
+}
+
+enum SubtitleAlignment { left, center, right }
+
+enum SweepDirection {
+  leftToRight,
+  rightToLeft,
+  centerOut,
+  bottomToTop,
+  topToBottom,
 }
 
 class SubtitleStyle {
@@ -224,14 +359,35 @@ class SubtitleStyle {
     this.fontFamily = 'Arial',
     this.fontSize = 58,
     this.fontWeight = 700,
+    this.isItalic = false,
+    this.isUnderline = false,
+    this.alignment = SubtitleAlignment.center,
+    this.letterSpacing = 1.0,
+    this.wordSpacing = 4.0,
+    this.lineHeight = 1.2,
     this.inactiveColorValue = 0xFFFFFFFF,
+    this.inactiveSecondaryColorValue = 0xFFB0BEC5,
+    this.inactiveUseGradient = false,
     this.activeColorValue = 0xFFFFC107,
+    this.activeSecondaryColorValue = 0xFFFF5722,
+    this.activeUseGradient = false,
     this.outlineColorValue = 0xFF000000,
-    this.outlineWidth = 3,
+    this.outlineWidth = 3.5,
+    this.outlineColorValue2 = 0x00000000,
+    this.outlineWidth2 = 0.0,
     this.shadowColorValue = 0x99000000,
     this.shadowBlur = 6,
     this.shadowOffsetX = 2,
     this.shadowOffsetY = 3,
+    this.glowColorValue = 0x00000000,
+    this.glowRadius = 0,
+    this.glowIntensity = 0.0,
+    this.scaleX = 1.0,
+    this.scaleY = 1.0,
+    this.rotationZ = 0.0,
+    this.skewX = 0.0,
+    this.skewY = 0.0,
+    this.sweepDirection = SweepDirection.leftToRight,
   });
 
   final String id;
@@ -239,14 +395,109 @@ class SubtitleStyle {
   final String fontFamily;
   final double fontSize;
   final int fontWeight;
+  final bool isItalic;
+  final bool isUnderline;
+  final SubtitleAlignment alignment;
+  final double letterSpacing;
+  final double wordSpacing;
+  final double lineHeight;
   final int inactiveColorValue;
+  final int inactiveSecondaryColorValue;
+  final bool inactiveUseGradient;
   final int activeColorValue;
+  final int activeSecondaryColorValue;
+  final bool activeUseGradient;
   final int outlineColorValue;
   final double outlineWidth;
+  final int outlineColorValue2;
+  final double outlineWidth2;
   final int shadowColorValue;
   final double shadowBlur;
   final double shadowOffsetX;
   final double shadowOffsetY;
+  final int glowColorValue;
+  final double glowRadius;
+  final double glowIntensity;
+  final double scaleX;
+  final double scaleY;
+  final double rotationZ;
+  final double skewX;
+  final double skewY;
+  final SweepDirection sweepDirection;
+
+  SubtitleStyle copyWith({
+    String? id,
+    String? name,
+    String? fontFamily,
+    double? fontSize,
+    int? fontWeight,
+    bool? isItalic,
+    bool? isUnderline,
+    SubtitleAlignment? alignment,
+    double? letterSpacing,
+    double? wordSpacing,
+    double? lineHeight,
+    int? inactiveColorValue,
+    int? inactiveSecondaryColorValue,
+    bool? inactiveUseGradient,
+    int? activeColorValue,
+    int? activeSecondaryColorValue,
+    bool? activeUseGradient,
+    int? outlineColorValue,
+    double? outlineWidth,
+    int? outlineColorValue2,
+    double? outlineWidth2,
+    int? shadowColorValue,
+    double? shadowBlur,
+    double? shadowOffsetX,
+    double? shadowOffsetY,
+    int? glowColorValue,
+    double? glowRadius,
+    double? glowIntensity,
+    double? scaleX,
+    double? scaleY,
+    double? rotationZ,
+    double? skewX,
+    double? skewY,
+    SweepDirection? sweepDirection,
+  }) => SubtitleStyle(
+    id: id ?? this.id,
+    name: name ?? this.name,
+    fontFamily: fontFamily ?? this.fontFamily,
+    fontSize: fontSize ?? this.fontSize,
+    fontWeight: fontWeight ?? this.fontWeight,
+    isItalic: isItalic ?? this.isItalic,
+    isUnderline: isUnderline ?? this.isUnderline,
+    alignment: alignment ?? this.alignment,
+    letterSpacing: letterSpacing ?? this.letterSpacing,
+    wordSpacing: wordSpacing ?? this.wordSpacing,
+    lineHeight: lineHeight ?? this.lineHeight,
+    inactiveColorValue: inactiveColorValue ?? this.inactiveColorValue,
+    inactiveSecondaryColorValue:
+        inactiveSecondaryColorValue ?? this.inactiveSecondaryColorValue,
+    inactiveUseGradient: inactiveUseGradient ?? this.inactiveUseGradient,
+    activeColorValue: activeColorValue ?? this.activeColorValue,
+    activeSecondaryColorValue:
+        activeSecondaryColorValue ?? this.activeSecondaryColorValue,
+    activeUseGradient: activeUseGradient ?? this.activeUseGradient,
+    outlineColorValue: outlineColorValue ?? this.outlineColorValue,
+    outlineWidth: outlineWidth ?? this.outlineWidth,
+    outlineColorValue2: outlineColorValue2 ?? this.outlineColorValue2,
+    outlineWidth2: outlineWidth2 ?? this.outlineWidth2,
+    shadowColorValue: shadowColorValue ?? this.shadowColorValue,
+    shadowBlur: shadowBlur ?? this.shadowBlur,
+    shadowOffsetX: shadowOffsetX ?? this.shadowOffsetX,
+    shadowOffsetY: shadowOffsetY ?? this.shadowOffsetY,
+    glowColorValue: glowColorValue ?? this.glowColorValue,
+    glowRadius: glowRadius ?? this.glowRadius,
+    glowIntensity: glowIntensity ?? this.glowIntensity,
+    scaleX: scaleX ?? this.scaleX,
+    scaleY: scaleY ?? this.scaleY,
+    rotationZ: rotationZ ?? this.rotationZ,
+    skewX: skewX ?? this.skewX,
+    skewY: skewY ?? this.skewY,
+    sweepDirection: sweepDirection ?? this.sweepDirection,
+  );
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -254,14 +505,35 @@ class SubtitleStyle {
     'fontFamily': fontFamily,
     'fontSize': fontSize,
     'fontWeight': fontWeight,
+    'isItalic': isItalic,
+    'isUnderline': isUnderline,
+    'alignment': alignment.name,
+    'letterSpacing': letterSpacing,
+    'wordSpacing': wordSpacing,
+    'lineHeight': lineHeight,
     'inactiveColorValue': inactiveColorValue,
+    'inactiveSecondaryColorValue': inactiveSecondaryColorValue,
+    'inactiveUseGradient': inactiveUseGradient,
     'activeColorValue': activeColorValue,
+    'activeSecondaryColorValue': activeSecondaryColorValue,
+    'activeUseGradient': activeUseGradient,
     'outlineColorValue': outlineColorValue,
     'outlineWidth': outlineWidth,
+    'outlineColorValue2': outlineColorValue2,
+    'outlineWidth2': outlineWidth2,
     'shadowColorValue': shadowColorValue,
     'shadowBlur': shadowBlur,
     'shadowOffsetX': shadowOffsetX,
     'shadowOffsetY': shadowOffsetY,
+    'glowColorValue': glowColorValue,
+    'glowRadius': glowRadius,
+    'glowIntensity': glowIntensity,
+    'scaleX': scaleX,
+    'scaleY': scaleY,
+    'rotationZ': rotationZ,
+    'skewX': skewX,
+    'skewY': skewY,
+    'sweepDirection': sweepDirection.name,
   };
 
   factory SubtitleStyle.fromJson(Map<String, Object?> json) => SubtitleStyle(
@@ -270,26 +542,115 @@ class SubtitleStyle {
     fontFamily: json['fontFamily'] as String? ?? 'Arial',
     fontSize: (json['fontSize'] as num?)?.toDouble() ?? 58,
     fontWeight: (json['fontWeight'] as num?)?.toInt() ?? 700,
+    isItalic: json['isItalic'] as bool? ?? false,
+    isUnderline: json['isUnderline'] as bool? ?? false,
+    alignment: SubtitleAlignment.values.firstWhere(
+      (e) => e.name == json['alignment'],
+      orElse: () => SubtitleAlignment.center,
+    ),
+    letterSpacing: (json['letterSpacing'] as num?)?.toDouble() ?? 1.0,
+    wordSpacing: (json['wordSpacing'] as num?)?.toDouble() ?? 4.0,
+    lineHeight: (json['lineHeight'] as num?)?.toDouble() ?? 1.2,
     inactiveColorValue:
         (json['inactiveColorValue'] as num?)?.toInt() ?? 0xFFFFFFFF,
+    inactiveSecondaryColorValue:
+        (json['inactiveSecondaryColorValue'] as num?)?.toInt() ?? 0xFFB0BEC5,
+    inactiveUseGradient: json['inactiveUseGradient'] as bool? ?? false,
     activeColorValue: (json['activeColorValue'] as num?)?.toInt() ?? 0xFFFFC107,
+    activeSecondaryColorValue:
+        (json['activeSecondaryColorValue'] as num?)?.toInt() ?? 0xFFFF5722,
+    activeUseGradient: json['activeUseGradient'] as bool? ?? false,
     outlineColorValue:
         (json['outlineColorValue'] as num?)?.toInt() ?? 0xFF000000,
-    outlineWidth: (json['outlineWidth'] as num?)?.toDouble() ?? 3,
+    outlineWidth: (json['outlineWidth'] as num?)?.toDouble() ?? 3.5,
+    outlineColorValue2:
+        (json['outlineColorValue2'] as num?)?.toInt() ?? 0x00000000,
+    outlineWidth2: (json['outlineWidth2'] as num?)?.toDouble() ?? 0.0,
     shadowColorValue: (json['shadowColorValue'] as num?)?.toInt() ?? 0x99000000,
     shadowBlur: (json['shadowBlur'] as num?)?.toDouble() ?? 6,
     shadowOffsetX: (json['shadowOffsetX'] as num?)?.toDouble() ?? 2,
     shadowOffsetY: (json['shadowOffsetY'] as num?)?.toDouble() ?? 3,
+    glowColorValue: (json['glowColorValue'] as num?)?.toInt() ?? 0x00000000,
+    glowRadius: (json['glowRadius'] as num?)?.toDouble() ?? 0.0,
+    glowIntensity: (json['glowIntensity'] as num?)?.toDouble() ?? 0.0,
+    scaleX: (json['scaleX'] as num?)?.toDouble() ?? 1.0,
+    scaleY: (json['scaleY'] as num?)?.toDouble() ?? 1.0,
+    rotationZ: (json['rotationZ'] as num?)?.toDouble() ?? 0.0,
+    skewX: (json['skewX'] as num?)?.toDouble() ?? 0.0,
+    skewY: (json['skewY'] as num?)?.toDouble() ?? 0.0,
+    sweepDirection: SweepDirection.values.firstWhere(
+      (e) => e.name == json['sweepDirection'],
+      orElse: () => SweepDirection.leftToRight,
+    ),
   );
 }
+
+class MarkerModel {
+  const MarkerModel({
+    required this.id,
+    required this.timeUs,
+    required this.name,
+    this.colorValue = 0xFFFFCA28,
+    this.notes = '',
+  });
+
+  final String id;
+  final int timeUs;
+  final String name;
+  final int colorValue;
+  final String notes;
+
+  MarkerModel copyWith({
+    String? id,
+    int? timeUs,
+    String? name,
+    int? colorValue,
+    String? notes,
+  }) => MarkerModel(
+    id: id ?? this.id,
+    timeUs: timeUs ?? this.timeUs,
+    name: name ?? this.name,
+    colorValue: colorValue ?? this.colorValue,
+    notes: notes ?? this.notes,
+  );
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'timeUs': timeUs,
+    'name': name,
+    'colorValue': colorValue,
+    'notes': notes,
+  };
+
+  factory MarkerModel.fromJson(Map<String, Object?> json) => MarkerModel(
+    id: json['id'] as String,
+    timeUs: (json['timeUs'] as num).toInt(),
+    name: json['name'] as String,
+    colorValue: (json['colorValue'] as num?)?.toInt() ?? 0xFFFFCA28,
+    notes: json['notes'] as String? ?? '',
+  );
+}
+
+enum LayoutMode { alternatingTwoRows, singleRow, multiRow }
 
 class ProjectSettings {
   const ProjectSettings({
     this.autosaveSeconds = 30,
     this.snapEnabled = true,
     this.snapThresholdMs = 20,
-    this.inputTimingOffsetMs = 0,
+    this.inputTimingOffsetMs = -80,
     this.mediaMode = 'reference',
+    this.layoutMode = LayoutMode.alternatingTwoRows,
+    this.rowAPositionX = 0.5,
+    this.rowAPositionY = 0.82,
+    this.rowBPositionX = 0.5,
+    this.rowBPositionY = 0.90,
+    this.singleRowPositionX = 0.5,
+    this.singleRowPositionY = 0.86,
+    this.leadTimeUs = 2000000,
+    this.keepActorPrefix = false,
+    this.recordingMode = 'hold',
+    this.preRollSeconds = 0,
   });
 
   final int autosaveSeconds;
@@ -297,6 +658,53 @@ class ProjectSettings {
   final int snapThresholdMs;
   final int inputTimingOffsetMs;
   final String mediaMode;
+  final LayoutMode layoutMode;
+  final double rowAPositionX;
+  final double rowAPositionY;
+  final double rowBPositionX;
+  final double rowBPositionY;
+  final double singleRowPositionX;
+  final double singleRowPositionY;
+  final int leadTimeUs;
+  final bool keepActorPrefix;
+  final String recordingMode;
+  final int preRollSeconds;
+
+  ProjectSettings copyWith({
+    int? autosaveSeconds,
+    bool? snapEnabled,
+    int? snapThresholdMs,
+    int? inputTimingOffsetMs,
+    String? mediaMode,
+    LayoutMode? layoutMode,
+    double? rowAPositionX,
+    double? rowAPositionY,
+    double? rowBPositionX,
+    double? rowBPositionY,
+    double? singleRowPositionX,
+    double? singleRowPositionY,
+    int? leadTimeUs,
+    bool? keepActorPrefix,
+    String? recordingMode,
+    int? preRollSeconds,
+  }) => ProjectSettings(
+    autosaveSeconds: autosaveSeconds ?? this.autosaveSeconds,
+    snapEnabled: snapEnabled ?? this.snapEnabled,
+    snapThresholdMs: snapThresholdMs ?? this.snapThresholdMs,
+    inputTimingOffsetMs: inputTimingOffsetMs ?? this.inputTimingOffsetMs,
+    mediaMode: mediaMode ?? this.mediaMode,
+    layoutMode: layoutMode ?? this.layoutMode,
+    rowAPositionX: rowAPositionX ?? this.rowAPositionX,
+    rowAPositionY: rowAPositionY ?? this.rowAPositionY,
+    rowBPositionX: rowBPositionX ?? this.rowBPositionX,
+    rowBPositionY: rowBPositionY ?? this.rowBPositionY,
+    singleRowPositionX: singleRowPositionX ?? this.singleRowPositionX,
+    singleRowPositionY: singleRowPositionY ?? this.singleRowPositionY,
+    leadTimeUs: leadTimeUs ?? this.leadTimeUs,
+    keepActorPrefix: keepActorPrefix ?? this.keepActorPrefix,
+    recordingMode: recordingMode ?? this.recordingMode,
+    preRollSeconds: preRollSeconds ?? this.preRollSeconds,
+  );
 
   Map<String, Object?> toJson() => {
     'autosaveSeconds': autosaveSeconds,
@@ -304,17 +712,43 @@ class ProjectSettings {
     'snapThresholdMs': snapThresholdMs,
     'inputTimingOffsetMs': inputTimingOffsetMs,
     'mediaMode': mediaMode,
+    'layoutMode': layoutMode.name,
+    'rowAPositionX': rowAPositionX,
+    'rowAPositionY': rowAPositionY,
+    'rowBPositionX': rowBPositionX,
+    'rowBPositionY': rowBPositionY,
+    'singleRowPositionX': singleRowPositionX,
+    'singleRowPositionY': singleRowPositionY,
+    'leadTimeUs': leadTimeUs,
+    'keepActorPrefix': keepActorPrefix,
+    'recordingMode': recordingMode,
+    'preRollSeconds': preRollSeconds,
   };
 
-  factory ProjectSettings.fromJson(Map<String, Object?> json) =>
-      ProjectSettings(
-        autosaveSeconds: (json['autosaveSeconds'] as num?)?.toInt() ?? 30,
-        snapEnabled: json['snapEnabled'] as bool? ?? true,
-        snapThresholdMs: (json['snapThresholdMs'] as num?)?.toInt() ?? 20,
-        inputTimingOffsetMs:
-            (json['inputTimingOffsetMs'] as num?)?.toInt() ?? 0,
-        mediaMode: json['mediaMode'] as String? ?? 'reference',
-      );
+  factory ProjectSettings.fromJson(
+    Map<String, Object?> json,
+  ) => ProjectSettings(
+    autosaveSeconds: (json['autosaveSeconds'] as num?)?.toInt() ?? 30,
+    snapEnabled: json['snapEnabled'] as bool? ?? true,
+    snapThresholdMs: (json['snapThresholdMs'] as num?)?.toInt() ?? 20,
+    inputTimingOffsetMs: (json['inputTimingOffsetMs'] as num?)?.toInt() ?? 0,
+    mediaMode: json['mediaMode'] as String? ?? 'reference',
+    layoutMode: LayoutMode.values.firstWhere(
+      (e) => e.name == json['layoutMode'],
+      orElse: () => LayoutMode.alternatingTwoRows,
+    ),
+    rowAPositionX: (json['rowAPositionX'] as num?)?.toDouble() ?? 0.5,
+    rowAPositionY: (json['rowAPositionY'] as num?)?.toDouble() ?? 0.82,
+    rowBPositionX: (json['rowBPositionX'] as num?)?.toDouble() ?? 0.5,
+    rowBPositionY: (json['rowBPositionY'] as num?)?.toDouble() ?? 0.90,
+    singleRowPositionX: (json['singleRowPositionX'] as num?)?.toDouble() ?? 0.5,
+    singleRowPositionY:
+        (json['singleRowPositionY'] as num?)?.toDouble() ?? 0.86,
+    leadTimeUs: (json['leadTimeUs'] as num?)?.toInt() ?? 2000000,
+    keepActorPrefix: json['keepActorPrefix'] as bool? ?? false,
+    recordingMode: json['recordingMode'] as String? ?? 'hold',
+    preRollSeconds: (json['preRollSeconds'] as num?)?.toInt() ?? 0,
+  );
 }
 
 class ProjectModel {
@@ -329,9 +763,11 @@ class ProjectModel {
     this.fps = 30,
     this.audio,
     this.video,
+    this.backgroundImage,
     this.actors = const [],
     this.lyricLines = const [],
-    this.styles = const [],
+    this.styles = defaultSubtitleStyles,
+    this.markers = const [],
     this.subtitleTracks = const [],
     this.backgroundLayers = const [],
     this.settings = const ProjectSettings(),
@@ -347,9 +783,11 @@ class ProjectModel {
   final double fps;
   final MediaAsset? audio;
   final MediaAsset? video;
+  final MediaAsset? backgroundImage;
   final List<Actor> actors;
   final List<LyricLine> lyricLines;
   final List<SubtitleStyle> styles;
+  final List<MarkerModel> markers;
   final List<Map<String, Object?>> subtitleTracks;
   final List<Map<String, Object?>> backgroundLayers;
   final ProjectSettings settings;
@@ -376,16 +814,8 @@ class ProjectModel {
           styleId: 'duet',
         ),
       ],
-      styles: const [
-        SubtitleStyle(id: 'classic', name: 'Classic Karaoke'),
-        SubtitleStyle(id: 'male', name: 'Male', activeColorValue: 0xFF42A5F5),
-        SubtitleStyle(
-          id: 'female',
-          name: 'Female',
-          activeColorValue: 0xFFEC407A,
-        ),
-        SubtitleStyle(id: 'duet', name: 'Duet', activeColorValue: 0xFFFFCA28),
-      ],
+      styles: defaultSubtitleStyles,
+      markers: const [],
       subtitleTracks: const [
         {'id': 'subtitle-main', 'name': 'Karaoke', 'visible': true},
       ],
@@ -393,28 +823,46 @@ class ProjectModel {
   }
 
   ProjectModel copyWith({
+    String? id,
     String? name,
     DateTime? modifiedAt,
+    int? canvasWidth,
+    int? canvasHeight,
+    double? fps,
     MediaAsset? audio,
     bool clearAudio = false,
+    MediaAsset? video,
+    bool clearVideo = false,
+    MediaAsset? backgroundImage,
+    bool clearBackgroundImage = false,
+    List<Actor>? actors,
     List<LyricLine>? lyricLines,
+    List<SubtitleStyle>? styles,
+    List<MarkerModel>? markers,
+    List<Map<String, Object?>>? subtitleTracks,
+    List<Map<String, Object?>>? backgroundLayers,
+    ProjectSettings? settings,
   }) => ProjectModel(
-    id: id,
+    id: id ?? this.id,
     name: name ?? this.name,
     version: version,
     createdAt: createdAt,
     modifiedAt: modifiedAt ?? this.modifiedAt,
-    canvasWidth: canvasWidth,
-    canvasHeight: canvasHeight,
-    fps: fps,
+    canvasWidth: canvasWidth ?? this.canvasWidth,
+    canvasHeight: canvasHeight ?? this.canvasHeight,
+    fps: fps ?? this.fps,
     audio: clearAudio ? null : (audio ?? this.audio),
-    video: video,
-    actors: actors,
+    video: clearVideo ? null : (video ?? this.video),
+    backgroundImage: clearBackgroundImage
+        ? null
+        : (backgroundImage ?? this.backgroundImage),
+    actors: actors ?? this.actors,
     lyricLines: lyricLines ?? this.lyricLines,
-    styles: styles,
-    subtitleTracks: subtitleTracks,
-    backgroundLayers: backgroundLayers,
-    settings: settings,
+    styles: styles ?? this.styles,
+    markers: markers ?? this.markers,
+    subtitleTracks: subtitleTracks ?? this.subtitleTracks,
+    backgroundLayers: backgroundLayers ?? this.backgroundLayers,
+    settings: settings ?? this.settings,
   );
 
   Map<String, Object?> toJson() => {
@@ -429,9 +877,11 @@ class ProjectModel {
     'fps': fps,
     'audio': audio?.toJson(),
     'video': video?.toJson(),
+    'backgroundImage': backgroundImage?.toJson(),
     'actors': actors.map((actor) => actor.toJson()).toList(),
     'lyricLines': lyricLines.map((line) => line.toJson()).toList(),
     'styles': styles.map((style) => style.toJson()).toList(),
+    'markers': markers.map((marker) => marker.toJson()).toList(),
     'subtitleTracks': subtitleTracks,
     'backgroundLayers': backgroundLayers,
     'projectSettings': settings.toJson(),
@@ -460,14 +910,18 @@ class ProjectModel {
       video: json['video'] == null
           ? null
           : MediaAsset.fromJson((json['video'] as Map).cast()),
+      backgroundImage: json['backgroundImage'] == null
+          ? null
+          : MediaAsset.fromJson((json['backgroundImage'] as Map).cast()),
       actors: ((json['actors'] as List?) ?? const [])
           .map((item) => Actor.fromJson((item as Map).cast()))
           .toList(),
       lyricLines: ((json['lyricLines'] as List?) ?? const [])
           .map((item) => LyricLine.fromJson((item as Map).cast()))
           .toList(),
-      styles: ((json['styles'] as List?) ?? const [])
-          .map((item) => SubtitleStyle.fromJson((item as Map).cast()))
+      styles: _subtitleStylesFromJson(json['styles']),
+      markers: ((json['markers'] as List?) ?? const [])
+          .map((item) => MarkerModel.fromJson((item as Map).cast()))
           .toList(),
       subtitleTracks: ((json['subtitleTracks'] as List?) ?? const [])
           .map((item) => Map<String, Object?>.from(item as Map))
@@ -480,4 +934,33 @@ class ProjectModel {
       ),
     );
   }
+}
+
+const defaultSubtitleStyles = <SubtitleStyle>[
+  SubtitleStyle(id: 'classic', name: 'Classic Karaoke'),
+  SubtitleStyle(
+    id: 'male',
+    name: 'Male Style',
+    activeColorValue: 0xFF42A5F5,
+    activeSecondaryColorValue: 0xFF1E88E5,
+  ),
+  SubtitleStyle(
+    id: 'female',
+    name: 'Female Style',
+    activeColorValue: 0xFFEC407A,
+    activeSecondaryColorValue: 0xFFD81B60,
+  ),
+  SubtitleStyle(
+    id: 'duet',
+    name: 'Duet Style',
+    activeColorValue: 0xFFFFCA28,
+    activeSecondaryColorValue: 0xFFFF8F00,
+  ),
+];
+
+List<SubtitleStyle> _subtitleStylesFromJson(Object? value) {
+  final styles = ((value as List?) ?? const [])
+      .map((item) => SubtitleStyle.fromJson((item as Map).cast()))
+      .toList();
+  return styles.isEmpty ? defaultSubtitleStyles : styles;
 }
