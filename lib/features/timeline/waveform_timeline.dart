@@ -50,6 +50,11 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
   MouseCursor _cursor = MouseCursor.defer;
   DateTime _manualNavigationUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
+  // Trackpad 2-finger zoom state
+  bool _isPanZooming = false;
+  double _panZoomStartZoom = 1.0;
+  int _panZoomAnchorTimeUs = 0;
+
   static const double rulerHeight = 22.0;
   static const double markersHeight = 18.0;
   static const double subtitleTrackHeight = 56.0;
@@ -127,37 +132,101 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
     return (timeUs - _viewStartUs) / _visibleDurationUs * width;
   }
 
-  void _onPointerSignal(PointerSignalEvent event, double width) {
-    if (event is! PointerScrollEvent || widget.durationUs <= 0) return;
+  void _zoomByFactor(double factor, double focalX, double width) {
+    if (widget.durationUs <= 0 || width <= 0 || _dragMode != _DragMode.none) return;
     _pauseAutoFollow();
 
-    if (HardwareKeyboard.instance.isShiftPressed ||
-        event.scrollDelta.dx.abs() > event.scrollDelta.dy.abs()) {
-      final delta = event.scrollDelta.dx.abs() > event.scrollDelta.dy.abs()
-          ? event.scrollDelta.dx
-          : event.scrollDelta.dy;
-      setState(() {
-        scroll = (scroll + delta / math.max(200, width)).clamp(0.0, 1.0);
-      });
-      return;
-    }
+    final pointerFraction = (focalX / width).clamp(0.0, 1.0);
+    final anchorTimeUs =
+        _viewStartUs + (_visibleDurationUs * pointerFraction).round();
+    final newZoom = (zoom * factor).clamp(1.0, 128.0);
+    _applyZoom(newZoom, anchorTimeUs, pointerFraction);
+  }
 
-    final pointerFraction = (event.localPosition.dx / width).clamp(0.0, 1.0);
-    final anchorTimeUs = _viewStartUs + (_visibleDurationUs * pointerFraction);
+  void _applyZoom(double newZoom, int anchorTimeUs, double pointerFraction) {
     setState(() {
-      zoom = (zoom * (event.scrollDelta.dy > 0 ? 0.86 : 1.16)).clamp(
-        1.0,
-        128.0,
-      );
-      if (zoom == 1.0) {
+      zoom = newZoom;
+      if (zoom <= 1.001) {
+        zoom = 1.0;
         scroll = 0.0;
       } else {
         final newVisibleUs = _visibleDurationUs;
         final maxStartUs = math.max(1, widget.durationUs - newVisibleUs);
-        final desiredStartUs = anchorTimeUs - newVisibleUs * pointerFraction;
+        final desiredStartUs =
+            anchorTimeUs - (newVisibleUs * pointerFraction).round();
         scroll = (desiredStartUs / maxStartUs).clamp(0.0, 1.0);
       }
     });
+  }
+
+  void _onPointerPanZoomStart(PointerPanZoomStartEvent event, double width) {
+    if (widget.durationUs <= 0 || width <= 0) return;
+    if (_dragMode == _DragMode.moveToken ||
+        _dragMode == _DragMode.resizeTokenStart ||
+        _dragMode == _DragMode.resizeTokenEnd) {
+      return;
+    }
+    _isPanZooming = true;
+    _pauseAutoFollow();
+    _panZoomStartZoom = zoom;
+    final pointerFraction = (event.localPosition.dx / width).clamp(0.0, 1.0);
+    _panZoomAnchorTimeUs =
+        _viewStartUs + (_visibleDurationUs * pointerFraction).round();
+  }
+
+  void _onPointerPanZoomUpdate(PointerPanZoomUpdateEvent event, double width) {
+    if (!_isPanZooming || widget.durationUs <= 0 || width <= 0) return;
+    _pauseAutoFollow();
+
+    // 2-finger trackpad pinch-to-zoom
+    if ((event.scale - 1.0).abs() > 0.001) {
+      final currentFraction = (event.localPosition.dx / width).clamp(0.0, 1.0);
+      final newZoom = (_panZoomStartZoom * event.scale).clamp(1.0, 128.0);
+      _applyZoom(newZoom, _panZoomAnchorTimeUs, currentFraction);
+    } else if (event.panDelta.dx != 0 && zoom > 1.0) {
+      // 2-finger trackpad horizontal pan
+      final deltaFraction = -event.panDelta.dx / math.max(200, width);
+      setState(() {
+        scroll = (scroll + deltaFraction).clamp(0.0, 1.0);
+      });
+    }
+  }
+
+  void _onPointerPanZoomEnd(PointerPanZoomEndEvent event) {
+    _isPanZooming = false;
+    _panZoomStartZoom = zoom;
+  }
+
+  void _onPointerSignal(PointerSignalEvent event, double width) {
+    if (widget.durationUs <= 0 || width <= 0 || _dragMode != _DragMode.none) return;
+    _pauseAutoFollow();
+
+    // Direct trackpad / pinch scale events
+    if (event is PointerScaleEvent) {
+      _zoomByFactor(event.scale, event.localPosition.dx, width);
+      return;
+    }
+
+    if (event is PointerScrollEvent) {
+      if (HardwareKeyboard.instance.isShiftPressed ||
+          event.scrollDelta.dx.abs() > event.scrollDelta.dy.abs()) {
+        final delta = event.scrollDelta.dx.abs() > event.scrollDelta.dy.abs()
+            ? event.scrollDelta.dx
+            : event.scrollDelta.dy;
+        setState(() {
+          scroll = (scroll + delta / math.max(200, width)).clamp(0.0, 1.0);
+        });
+        return;
+      }
+
+      // Smooth scroll wheel / trackpad 2-finger scroll zoom
+      final isZoomModifier = HardwareKeyboard.instance.isMetaPressed ||
+          HardwareKeyboard.instance.isControlPressed;
+      final factor = math.exp(
+        -event.scrollDelta.dy * (isZoomModifier ? 0.008 : 0.005),
+      );
+      _zoomByFactor(factor, event.localPosition.dx, width);
+    }
   }
 
   void _onHover(PointerHoverEvent event, double width) {
@@ -220,6 +289,7 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
   }
 
   void _onPanStart(DragStartDetails details, double width) {
+    if (_isPanZooming) return;
     final pos = details.localPosition;
 
     // 1. Subtitle Track Hit Testing
@@ -263,6 +333,7 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
   }
 
   void _onPanUpdate(DragUpdateDetails details, double width) {
+    if (_isPanZooming) return;
     if (_dragMode == _DragMode.seek) {
       final time = _xToTimeUs(details.localPosition.dx, width);
       widget.clock.seek(Duration(microseconds: time));
@@ -390,6 +461,7 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
   }
 
   void _onPanEnd(DragEndDetails details) {
+    if (_isPanZooming) return;
     setState(() {
       _dragMode = _DragMode.none;
       _activeLineIndex = null;
@@ -692,127 +764,143 @@ class _WaveformTimelineState extends State<WaveformTimeline> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Top Toolbar (Zoom, Marker, Audio title)
-        Container(
-          height: 28,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainer,
-            border: Border(
-              bottom: BorderSide(color: Theme.of(context).dividerColor),
-            ),
-          ),
-          child: Row(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        return Listener(
+          onPointerSignal: (event) => _onPointerSignal(event, width),
+          onPointerPanZoomStart: (event) =>
+              _onPointerPanZoomStart(event, width),
+          onPointerPanZoomUpdate: (event) =>
+              _onPointerPanZoomUpdate(event, width),
+          onPointerPanZoomEnd: _onPointerPanZoomEnd,
+          child: Column(
             children: [
-              const Icon(Icons.graphic_eq, size: 15, color: Color(0xFFFFB300)),
-              const SizedBox(width: 6),
-              const Text(
-                'TIMELINE (Cuộn chuột: zoom • Shift+cuộn: di chuyển)',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(width: 16),
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
+              // Top Toolbar (Zoom, Marker, Audio title)
+              Container(
+                height: 28,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainer,
+                  border: Border(
+                    bottom: BorderSide(color: Theme.of(context).dividerColor),
                   ),
-                  minimumSize: const Size(24, 20),
                 ),
-                onPressed: () =>
-                    widget.onAddMarker?.call(widget.clock.positionUs),
-                icon: const Icon(Icons.bookmark_add_outlined, size: 12),
-                label: const Text(
-                  'Add Marker (M)',
-                  style: TextStyle(fontSize: 10),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.graphic_eq,
+                      size: 15,
+                      color: Color(0xFFFFB300),
+                    ),
+                    const SizedBox(width: 6),
+                    const Flexible(
+                      child: Text(
+                        'TIMELINE (Trackpad: zoom 2 ngón • Cuộn: zoom • Shift+cuộn: di chuyển)',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        minimumSize: const Size(24, 20),
+                      ),
+                      onPressed: () =>
+                          widget.onAddMarker?.call(widget.clock.positionUs),
+                      icon: const Icon(Icons.bookmark_add_outlined, size: 12),
+                      label: const Text(
+                        'Add Marker (M)',
+                        style: TextStyle(fontSize: 10),
+                      ),
+                    ),
+                    const Spacer(),
+                    const Icon(Icons.zoom_out, size: 14),
+                    SizedBox(
+                      width: 110,
+                      child: Slider(
+                        value: math.log(zoom) / math.log(128),
+                        onChanged: (value) => setState(() {
+                          _pauseAutoFollow();
+                          zoom = math.pow(128, value).toDouble();
+                          if (zoom < 1.01) {
+                            zoom = 1.0;
+                            scroll = 0.0;
+                          }
+                        }),
+                      ),
+                    ),
+                    const Icon(Icons.zoom_in, size: 14),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Text(
+                        '${zoom.toStringAsFixed(1)}×',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const Spacer(),
-              const Icon(Icons.zoom_out, size: 14),
-              SizedBox(
-                width: 110,
-                child: Slider(
-                  value: math.log(zoom) / math.log(128),
-                  onChanged: (value) => setState(() {
-                    _pauseAutoFollow();
-                    zoom = math.pow(128, value).toDouble();
-                    if (zoom < 1.01) {
-                      zoom = 1.0;
-                      scroll = 0.0;
-                    }
-                  }),
-                ),
-              ),
-              const Icon(Icons.zoom_in, size: 14),
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Text(
-                  '${zoom.toStringAsFixed(1)}×',
-                  style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
-                ),
-              ),
-            ],
-          ),
-        ),
 
-        // Main Multi-Track Area
-        Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) => MouseRegion(
-              cursor: _cursor,
-              onHover: (e) => _onHover(e, constraints.maxWidth),
-              child: Listener(
-                onPointerSignal: (event) =>
-                    _onPointerSignal(event, constraints.maxWidth),
-                child: GestureDetector(
-                  key: const Key('timeline_gesture_detector'),
-                  behavior: HitTestBehavior.opaque,
-                  onTapDown: (d) => _onTapDown(d, constraints.maxWidth),
-                  onDoubleTapDown: (d) =>
-                      _onDoubleTapDown(d, constraints.maxWidth),
-                  onPanStart: (d) => _onPanStart(d, constraints.maxWidth),
-                  onPanUpdate: (d) => _onPanUpdate(d, constraints.maxWidth),
-                  onPanEnd: _onPanEnd,
-                  child: ListenableBuilder(
-                    listenable: widget.clock,
-                    builder: (context, _) => CustomPaint(
-                      size: Size.infinite,
-                      painter: _MultiTrackTimelinePainter(
-                        waveform: widget.waveform,
-                        project: widget.project,
-                        durationUs: widget.durationUs,
-                        viewStartUs: _viewStartUs,
-                        visibleDurationUs: _visibleDurationUs,
-                        positionUs: widget.clock.positionUs,
-                        colors: Theme.of(context).colorScheme,
+              // Main Multi-Track Area
+              Expanded(
+                child: MouseRegion(
+                  cursor: _cursor,
+                  onHover: (e) => _onHover(e, width),
+                  child: GestureDetector(
+                    key: const Key('timeline_gesture_detector'),
+                    behavior: HitTestBehavior.opaque,
+                    onTapDown: (d) => _onTapDown(d, width),
+                    onDoubleTapDown: (d) => _onDoubleTapDown(d, width),
+                    onPanStart: (d) => _onPanStart(d, width),
+                    onPanUpdate: (d) => _onPanUpdate(d, width),
+                    onPanEnd: _onPanEnd,
+                    child: ListenableBuilder(
+                      listenable: widget.clock,
+                      builder: (context, _) => CustomPaint(
+                        size: Size.infinite,
+                        painter: _MultiTrackTimelinePainter(
+                          waveform: widget.waveform,
+                          project: widget.project,
+                          durationUs: widget.durationUs,
+                          viewStartUs: _viewStartUs,
+                          visibleDurationUs: _visibleDurationUs,
+                          positionUs: widget.clock.positionUs,
+                          colors: Theme.of(context).colorScheme,
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
-        ),
 
-        // Horizontal Scrollbar if zoomed
-        if (zoom > 1.0)
-          SizedBox(
-            height: 14,
-            child: Slider(
-              value: scroll,
-              onChanged: (value) => setState(() {
-                _pauseAutoFollow();
-                scroll = value;
-              }),
-            ),
+              // Horizontal Scrollbar if zoomed
+              if (zoom > 1.0)
+                SizedBox(
+                  height: 14,
+                  child: Slider(
+                    value: scroll,
+                    onChanged: (value) => setState(() {
+                      _pauseAutoFollow();
+                      scroll = value;
+                    }),
+                  ),
+                ),
+            ],
           ),
-      ],
+        );
+      },
     );
   }
 }

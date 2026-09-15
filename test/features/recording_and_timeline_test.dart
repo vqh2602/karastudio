@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -566,6 +567,148 @@ void main() {
         // Word 2 should be full 2.0s duration (ends at 5.0s, NOT truncated to 3.49s)!
         expect(line0.tokens[2].startUs, equals(3000000));
         expect(line0.tokens[2].endUs, equals(5000000));
+      },
+    );
+
+    testWidgets(
+      'WaveformTimeline zooms in with 2-finger trackpad pinch gesture on timeline',
+      (tester) async {
+        tester.view.physicalSize = const Size(1200, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+
+        final clock = FakePlaybackClock();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 1000,
+                height: 250,
+                child: WaveformTimeline(
+                  clock: clock,
+                  durationUs: 30000000,
+                  waveform: null,
+                  project: ProjectModel.create('Pinch test'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('1.0×'), findsOneWidget);
+
+        // Send trackpad pan/zoom events over the timeline multi-track area (x=500, y=100)
+        await tester.sendEventToBinding(
+          const PointerPanZoomStartEvent(
+            position: Offset(500, 100),
+          ),
+        );
+        await tester.sendEventToBinding(
+          const PointerPanZoomUpdateEvent(
+            position: Offset(500, 100),
+            scale: 2.5,
+          ),
+        );
+        await tester.sendEventToBinding(
+          const PointerPanZoomEndEvent(
+            position: Offset(500, 100),
+          ),
+        );
+        await tester.pump();
+
+        expect(find.text('2.5×'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'WaveformTimeline zooms in with 2-finger trackpad pinch gesture on top toolbar',
+      (tester) async {
+        tester.view.physicalSize = const Size(1200, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+
+        final clock = FakePlaybackClock();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 1000,
+                height: 250,
+                child: WaveformTimeline(
+                  clock: clock,
+                  durationUs: 30000000,
+                  waveform: null,
+                  project: ProjectModel.create('Toolbar pinch test'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('1.0×'), findsOneWidget);
+
+        // Send trackpad pan/zoom events over top toolbar (x=500, y=14)
+        await tester.sendEventToBinding(
+          const PointerPanZoomStartEvent(
+            position: Offset(500, 14),
+          ),
+        );
+        await tester.sendEventToBinding(
+          const PointerPanZoomUpdateEvent(
+            position: Offset(500, 14),
+            scale: 3.0,
+          ),
+        );
+        await tester.sendEventToBinding(
+          const PointerPanZoomEndEvent(
+            position: Offset(500, 14),
+          ),
+        );
+        await tester.pump();
+
+        expect(find.text('3.0×'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'WaveformTimeline responds to PointerScaleEvent directly',
+      (tester) async {
+        tester.view.physicalSize = const Size(1200, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+
+        final clock = FakePlaybackClock();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 1000,
+                height: 250,
+                child: WaveformTimeline(
+                  clock: clock,
+                  durationUs: 30000000,
+                  waveform: null,
+                  project: ProjectModel.create('Scale test'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('1.0×'), findsOneWidget);
+
+        await tester.sendEventToBinding(
+          const PointerScaleEvent(
+            position: Offset(500, 100),
+            scale: 2.0,
+          ),
+        );
+        await tester.pump();
+
+        expect(find.text('2.0×'), findsOneWidget);
       },
     );
   });

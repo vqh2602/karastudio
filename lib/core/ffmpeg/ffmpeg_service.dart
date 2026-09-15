@@ -219,7 +219,7 @@ class FfmpegService {
     final key = sha1
         .convert(
           utf8.encode(
-            '$audioPath|${stat.size}|${stat.modified.microsecondsSinceEpoch}|${effects.semitones}|${effects.reverb}|${effects.tuningHz}',
+            '$audioPath|${stat.size}|${stat.modified.microsecondsSinceEpoch}|${effects.semitones}|${effects.reverb}|${effects.tuningHz}|${effects.bass}',
           ),
         )
         .toString();

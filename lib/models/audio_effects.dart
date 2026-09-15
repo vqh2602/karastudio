@@ -7,15 +7,20 @@ class AudioEffects {
     this.reverb = 0,
     this.tuningHz = 440,
     this.speed = 1,
+    this.bass = 0,
   });
 
   final int semitones;
   final double reverb;
   final double tuningHz;
   final double speed;
+  final double bass;
 
   bool get hasPitchOrReverb =>
-      semitones != 0 || reverb > 0 || (tuningHz - 440).abs() >= 0.01;
+      semitones != 0 ||
+      reverb > 0 ||
+      (tuningHz - 440).abs() >= 0.01 ||
+      bass.abs() >= 0.01;
 
   double get pitchRatio => math.pow(2, semitones / 12) * tuningHz / 440;
 
@@ -30,6 +35,9 @@ class AudioEffects {
         'atempo=tempo=$tempo',
         'atempo=tempo=$tempo',
       ]);
+    }
+    if (bass.abs() >= 0.01) {
+      filters.add('bass=g=${bass.toStringAsFixed(1)}:f=100');
     }
     if (reverb > 0) {
       final wet = reverb.clamp(0, 100) / 100;
@@ -56,11 +64,26 @@ class AudioEffects {
     ],
   ].join(',');
 
+  AudioEffects copyWith({
+    int? semitones,
+    double? reverb,
+    double? tuningHz,
+    double? speed,
+    double? bass,
+  }) => AudioEffects(
+    semitones: semitones ?? this.semitones,
+    reverb: reverb ?? this.reverb,
+    tuningHz: tuningHz ?? this.tuningHz,
+    speed: speed ?? this.speed,
+    bass: bass ?? this.bass,
+  );
+
   Map<String, Object?> toJson() => {
     'semitones': semitones,
     'reverb': reverb,
     'tuningHz': tuningHz,
     'speed': speed,
+    'bass': bass,
   };
 
   factory AudioEffects.fromJson(Map<String, Object?> json) => AudioEffects(
@@ -71,5 +94,6 @@ class AudioEffects {
       415.3,
       466.2,
     ),
+    bass: ((json['bass'] as num?)?.toDouble() ?? 0).clamp(-20, 30),
   );
 }

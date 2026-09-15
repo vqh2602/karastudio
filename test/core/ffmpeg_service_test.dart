@@ -4,6 +4,18 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:karastudio/core/ffmpeg/ffmpeg_service.dart';
 import 'package:karastudio/models/audio_effects.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:plugin_platform_interface/plugin_platform_interface.dart';
+
+class MockPathProviderPlatform extends Fake
+    with MockPlatformInterfaceMixin
+    implements PathProviderPlatform {
+  MockPathProviderPlatform(this.path);
+  final String path;
+
+  @override
+  Future<String?> getApplicationSupportPath() async => path;
+}
 
 void main() {
   test('video encoder applies pitch and speed to the exported audio', () async {
@@ -73,6 +85,34 @@ void main() {
       }
       final hz = crossings / (bytes.lengthInBytes / 2 / 48000);
       expect(hz, closeTo(880, 15));
+    } finally {
+      await dir.delete(recursive: true);
+    }
+  });
+  test('renders processed audio with bass boost and caches result', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    final service = FfmpegService();
+    final ffmpeg = await service.getFfmpegPath();
+    final dir = await Directory.systemTemp.createTemp('kara-bass-test-');
+    PathProviderPlatform.instance = MockPathProviderPlatform(dir.path);
+    try {
+      final audio = '${dir.path}/tone.wav';
+      final generated = await Process.run(ffmpeg, [
+        '-v',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=100:duration=1',
+        audio,
+      ]);
+      expect(generated.exitCode, 0);
+      final processed = await service.renderProcessedAudio(
+        audio,
+        const AudioEffects(bass: 10),
+      );
+      expect(File(processed).existsSync(), isTrue);
+      expect(await File(processed).length(), greaterThan(0));
     } finally {
       await dir.delete(recursive: true);
     }

@@ -23,6 +23,7 @@ class _AudioEffectsDialogState extends State<_AudioEffectsDialog> {
   late double reverb;
   late double tuning;
   late double speed;
+  late double bass;
   bool busy = false;
   String? error;
   bool isBypassed = false;
@@ -35,6 +36,7 @@ class _AudioEffectsDialogState extends State<_AudioEffectsDialog> {
     reverb = fx.reverb;
     tuning = fx.tuningHz;
     speed = fx.speed;
+    bass = fx.bass;
     widget.editor.playback.addListener(_onPlaybackChanged);
   }
 
@@ -62,6 +64,7 @@ class _AudioEffectsDialogState extends State<_AudioEffectsDialog> {
         reverb: isBypassed ? 0 : reverb,
         tuningHz: isBypassed ? 440 : tuning,
         speed: speed,
+        bass: isBypassed ? 0 : bass,
       );
       await widget.editor.applyAudioEffects(
         fx,
@@ -244,6 +247,16 @@ class _AudioEffectsDialogState extends State<_AudioEffectsDialog> {
                 24,
                 '$semitones nửa cung',
                 (v) => semitones = v.round(),
+                0,
+              ),
+              control(
+                'Tăng âm trầm (Bass)',
+                bass,
+                0,
+                20,
+                20,
+                bass == 0 ? '0 dB' : '+${bass.round()} dB',
+                (v) => bass = v,
                 0,
               ),
               control(
