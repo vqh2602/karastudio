@@ -1,0 +1,104 @@
+name: Build & Release macOS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Loại tăng phiên bản (auto, patch, minor, major)'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, Tag & Publish Release
+    runs-on: macos-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run unit tests
+        run: flutter test
+
+      - name: Bump application version
+        id: bump
+        run: |
+          BUMP_MODE="${{ github.event.inputs.bump_type }}"
+          if [ -z "$BUMP_MODE" ]; then
+            BUMP_MODE="auto"
+          fi
+          echo "Running version bumper with mode: $BUMP_MODE"
+          dart run tool/bump_version.dart "$BUMP_MODE"
+
+      - name: Commit version bump & push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add pubspec.yaml
+          git commit -m "chore(release): bump version to ${{ steps.bump.outputs.full_version }} [skip ci]" || echo "No changes to commit"
+
+          git tag -a "${{ steps.bump.outputs.tag_name }}" -m "Release ${{ steps.bump.outputs.tag_name }}"
+          git push origin HEAD:main || echo "::warning::Could not push pubspec.yaml to main branch directly (possibly branch protection)."
+          git push origin "${{ steps.bump.outputs.tag_name }}"
+
+      - name: Build macOS application (Release)
+        run: |
+          flutter build macos --release \
+            --build-name="${{ steps.bump.outputs.version }}" \
+            --build-number="${{ steps.bump.outputs.build_number }}"
+
+      - name: Package macOS installer (.dmg & .zip)
+        run: |
+          APP_DIR="build/macos/Build/Products/Release/karastudio.app"
+          TAG="${{ steps.bump.outputs.tag_name }}"
+          ZIP_NAME="karastudio-macos-${TAG}.zip"
+          DMG_NAME="karastudio-macos-${TAG}.dmg"
+
+          echo "Packaging $ZIP_NAME..."
+          ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_NAME"
+
+          echo "Packaging $DMG_NAME..."
+          hdiutil create -volname "KaraStudio" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG_NAME"
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.bump.outputs.tag_name }}"
+          ZIP_NAME="karastudio-macos-${TAG}.zip"
+          DMG_NAME="karastudio-macos-${TAG}.dmg"
+
+          echo "Creating GitHub release for $TAG..."
+          gh release create "$TAG" \
+            "$DMG_NAME" \
+            "$ZIP_NAME" \
+            --title "KaraStudio $TAG" \
+            --generate-notes

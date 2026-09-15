@@ -1,0 +1,50 @@
+name: Pull Request CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: Test & Build macOS
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze code
+        run: flutter analyze
+
+      - name: Run unit tests
+        run: flutter test
+
+      - name: Build macOS application (Release)
+        run: flutter build macos --release
+
+      - name: Compress macOS app for testing
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/macos/Build/Products/Release/karastudio.app \
+            karastudio-macos-pr-${{ github.event.pull_request.number }}.zip
+
+      - name: Upload macOS build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: karastudio-macos-pr-${{ github.event.pull_request.number }}
+          path: karastudio-macos-pr-${{ github.event.pull_request.number }}.zip
+          retention-days: 7
